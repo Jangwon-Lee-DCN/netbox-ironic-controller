@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: netbox-ironic-controller
+  labels:
+    app.kubernetes.io/name: netbox-ironic-controller
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: netbox-ironic-controller-bmc
+  labels:
+    app.kubernetes.io/name: netbox-ironic-controller
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netbox-ironic-controller
+  namespace: netbox-ironic-controller
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bmc-secret-reader
+  namespace: netbox-ironic-controller-bmc
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: netbox-ironic-controller
+  namespace: netbox-ironic-controller-bmc
+subjects:
+  - kind: ServiceAccount
+    name: netbox-ironic-controller
+    namespace: netbox-ironic-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bmc-secret-reader
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-ironic-controller
+  namespace: netbox-ironic-controller
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netbox-ironic-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netbox-ironic-controller
+    spec:
+      serviceAccountName: netbox-ironic-controller
+      imagePullSecrets:
+        - name: netbox-ironic-controller-registry-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: controller
+          image: registry.example.com/openstack/netbox-ironic-controller:0.5.1
+          imagePullPolicy: IfNotPresent
+          args: ["uvicorn", "netbox_ironic_controller.sync_api:app", "--host", "0.0.0.0", "--port", "8080"]
+          env:
+            - {name: RACKD_SYNC_ENABLED, value: "true"}
+            - {name: RACKD_SYNC_INTERVAL_SECONDS, value: "60"}
+            - {name: RACKD_SYNC_BMC_SECRET_NAMESPACE, value: netbox-ironic-controller-bmc}
+            - {name: RACKD_NETBOX_URL, value: "http://netbox.netbox.svc.cluster.local/netbox/api"}
+            - name: RACKD_NETBOX_TOKEN
+              valueFrom: {secretKeyRef: {name: netbox-ironic-controller-netbox, key: token}}
+            - name: RACKD_OPENSTACK_AUTH_URL
+              valueFrom: {secretKeyRef: {name: netbox-ironic-controller-openstack, key: auth-url}}
+            - name: RACKD_OPENSTACK_USERNAME
+              valueFrom: {secretKeyRef: {name: netbox-ironic-controller-openstack, key: username}}
+            - name: RACKD_OPENSTACK_PASSWORD
+              valueFrom: {secretKeyRef: {name: netbox-ironic-controller-openstack, key: password}}
+            - {name: RACKD_OPENSTACK_USER_DOMAIN_NAME, value: Default}
+            - {name: RACKD_OPENSTACK_SYSTEM_SCOPE, value: all}
+            - {name: RACKD_OPENSTACK_REGION, value: example-region}
+            - {name: RACKD_OPENSTACK_INTERFACE, value: internal}
+          ports:
+            - {name: http, containerPort: 8080}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

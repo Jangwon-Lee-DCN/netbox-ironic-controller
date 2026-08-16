@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: netbox-ironic-controller-keystone
+  namespace: openstack
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: reconcile
+          image: quay.io/airshipit/openstack-client:2026.1-ubuntu_noble
+          command: [bash, -ceu]
+          args:
+            - |
+              openstack user show netbox-ironic-controller >/dev/null 2>&1 ||
+                openstack user create --domain Default --password "$CONTROLLER_PASSWORD" netbox-ironic-controller >/dev/null
+              openstack user set --password "$CONTROLLER_PASSWORD" netbox-ironic-controller
+              openstack role add --system all --user netbox-ironic-controller admin
+              openstack token issue >/dev/null
+          envFrom:
+            - secretRef: {name: keystone-keystone-admin}
+          env:
+            - name: CONTROLLER_PASSWORD
+              valueFrom: {secretKeyRef: {name: netbox-ironic-controller-keystone-bootstrap, key: password}}

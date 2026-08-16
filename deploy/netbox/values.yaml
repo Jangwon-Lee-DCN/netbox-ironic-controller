@@ -1,0 +1,113 @@
+global:
+  storageClass: example-rwo
+
+allowedHosts:
+  - netbox.example.com
+  - netbox
+  - netbox.netbox.svc
+  - netbox.netbox.svc.cluster.local
+
+basePath: netbox/
+loginRequired: true
+csrf:
+  trustedOrigins:
+    - https://netbox.example.com
+timeZone: Asia/Seoul
+defaultLanguage: ko-kr
+
+superuser:
+  name: admin
+  email: admin@example.com
+
+persistence:
+  enabled: true
+  storageClass: example-rwo
+  size: 5Gi
+
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+      storageClass: example-rwo
+      size: 20Gi
+
+valkey:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+      storageClass: example-rwo
+      size: 5Gi
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+worker:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+initContainers:
+  - name: collect-static
+    image: ghcr.io/netbox-community/netbox:v4.6.5
+    imagePullPolicy: IfNotPresent
+    command: [sh, -c, "cp -R /opt/netbox/netbox/static/. /srv/netbox/static/"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+      runAsNonRoot: true
+      runAsUser: 1000
+    volumeMounts:
+      - name: static
+        mountPath: /srv/netbox/static
+
+sidecars:
+  - name: static-server
+    image: busybox:1.38.0
+    imagePullPolicy: IfNotPresent
+    command: [httpd, -f, -p, "8081", -h, /srv]
+    ports:
+      - name: static-http
+        containerPort: 8081
+    readinessProbe:
+      httpGet:
+        path: /netbox/static/netbox.css
+        port: static-http
+      initialDelaySeconds: 2
+      periodSeconds: 5
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+    volumeMounts:
+      - name: static
+        mountPath: /srv/netbox/static
+        readOnly: true
+      - name: media
+        mountPath: /srv/netbox/media
+        readOnly: true
+
+extraVolumes:
+  - name: static
+    emptyDir: {}

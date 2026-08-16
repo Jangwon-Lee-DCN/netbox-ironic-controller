@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: netbox-ironic-controller-image-build
+  namespace: netbox-ironic-controller
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        openstack-control-plane: enabled
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      initContainers:
+        - name: materialize-context
+          image: busybox:1.37.0
+          command: [sh, -c, "cp -LR /source/. /workspace/"]
+          volumeMounts:
+            - {name: context-source, mountPath: /source, readOnly: true}
+            - {name: context, mountPath: /workspace}
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
+          args:
+            - --context=dir:///workspace
+            - --dockerfile=/workspace/Dockerfile
+            - --destination=registry.example.com/openstack/netbox-ironic-controller:0.5.1
+            - --digest-file=/dev/termination-log
+            - --skip-tls-verify
+            - --snapshot-mode=redo
+          volumeMounts:
+            - {name: context, mountPath: /workspace, readOnly: true}
+            - {name: registry-auth, mountPath: /kaniko/.docker, readOnly: true}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 1Gi}
+      volumes:
+        - name: context-source
+          configMap:
+            name: netbox-ironic-controller-build-context
+            items:
+              - {key: Dockerfile, path: Dockerfile}
+              - {key: pyproject.toml, path: pyproject.toml}
+              - {key: init.py, path: netbox_ironic_controller/__init__.py}
+              - {key: config.py, path: netbox_ironic_controller/config.py}
+              - {key: sync.py, path: netbox_ironic_controller/sync.py}
+              - {key: sync_api.py, path: netbox_ironic_controller/sync_api.py}
+        - name: context
+          emptyDir: {}
+        - name: registry-auth
+          secret:
+            secretName: netbox-ironic-controller-registry-push
+            items: [{key: .dockerconfigjson, path: config.json}]
