@@ -18,6 +18,11 @@ NetBox를 기준 정보원으로 사용해 OpenStack Ironic의 베어메탈 인�
 
 배포 매니페스트는 `deploy/controller.yaml`입니다. 컨트롤러 자체의 `/healthz`, `/status`, `/reconcile` endpoint는 ClusterIP Service나 외부 Route에 연결하지 않았으며 Pod probe와 운영 점검 용도로만 사용합니다.
 
+NetBox 자체의 예제 설치와 Secret 동기화는
+[`deploy/netbox/README.md`](deploy/netbox/README.md)에 있습니다. 이 문서는
+컨트롤러 계약의 일부가 아니라 선택적 개발/검증 환경입니다. 운영 인벤토리와
+Ironic 배치 결정은 `openstack-production-datacenter`가 권위 원본입니다.
+
 ## 개발 및 테스트
 
 ```bash
