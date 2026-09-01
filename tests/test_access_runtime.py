@@ -65,10 +65,12 @@ async def test_deploy_pins_approved_glance_image_metadata_and_config_drive():
 async def test_deploy_accepts_contract_pinned_image_metadata_without_glance_lookup():
     runtime = client()
     runtime.conn.image = None
-    metadata = {"id": IMAGE, "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2"}
+    metadata = {"id": IMAGE, "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2",
+                "source_url": "https://images.example/ubuntu.img", "source_checksum": "a" * 64}
     await runtime.deploy(NODE, PROJECT, IMAGE, {}, OWNER, metadata)
     assert runtime.conn.baremetal.calls[0] == ("update", {"instance_info": {
-        "image_source": IMAGE, "image_checksum": "abc", "image_disk_format": "qcow2",
+        "image_source": "https://images.example/ubuntu.img", "image_checksum": "a" * 64,
+        "image_disk_format": "qcow2",
     }})
 
 

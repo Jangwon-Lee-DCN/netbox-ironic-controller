@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from .access_domain import OfferCandidate
 from .sync import IronicSyncClient, NetBoxSyncClient
@@ -62,9 +63,13 @@ class IronicLeaseAdapter:
         for image in images:
             if not isinstance(image, dict):
                 raise ValueError("each approved deploy image must be an object")
-            required = ("id", "name", "checksum", "disk_format")
+            required = ("id", "name", "checksum", "disk_format", "source_url", "source_checksum")
             if any(not isinstance(image.get(key), str) or not image[key] for key in required):
                 raise ValueError("approved deploy image metadata is incomplete")
+            if urlparse(image["source_url"]).scheme != "https":
+                raise ValueError("approved deploy image source must use HTTPS")
+            if not re.fullmatch(r"[0-9a-f]{64}", image["source_checksum"]):
+                raise ValueError("approved deploy image source checksum must be SHA-256")
             if image["id"] in result:
                 raise ValueError("approved deploy image IDs must be unique")
             result[image["id"]] = {key: image[key] for key in required}

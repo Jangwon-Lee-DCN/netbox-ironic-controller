@@ -74,7 +74,8 @@ async def test_lease_adapter_returns_and_deploys_contract_pinned_images():
         async def deploy(self, *args):
             self.calls.append(("deploy", args))
 
-    image = {"id": "image-1", "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2"}
+    image = {"id": "image-1", "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2",
+             "source_url": "https://images.example/ubuntu.img", "source_checksum": "a" * 64}
     ironic = ImageIronic()
     adapter = IronicLeaseAdapter(ironic, LeaseNetBox(), "dcn", deploy_images=[image])
     assert await adapter.approved_images() == [{"id": "image-1", "name": "Ubuntu"}]

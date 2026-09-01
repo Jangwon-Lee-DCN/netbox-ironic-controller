@@ -196,8 +196,8 @@ class IronicSyncClient:
             if not image or not image.checksum or not image.disk_format:
                 raise RuntimeError("approved image metadata is incomplete")
         instance_info = {
-            "image_source": image.id,
-            "image_checksum": image.checksum,
+            "image_source": getattr(image, "source_url", image.id),
+            "image_checksum": getattr(image, "source_checksum", image.checksum),
             "image_disk_format": image.disk_format,
         }
         node = await to_thread(self.conn.baremetal.update_node, node, instance_info=instance_info)
