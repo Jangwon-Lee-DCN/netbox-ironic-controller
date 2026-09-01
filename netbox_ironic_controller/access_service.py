@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
 
-from .access_domain import AccessRequest, Actor, OfferCandidate, RequestState
+from .access_domain import AccessRequest, Actor, DomainError, OfferCandidate, RequestState
 from .access_store import AccessStore
 from .access_operations import NodeOperation, OperationState
 
@@ -70,7 +70,7 @@ class AccessCoordinator:
                            expected_version: int | None = None) -> AccessRequest:
         item = await to_thread(self.store.get, request_id)
         if await to_thread(self.store.has_active_operations, request_id):
-            raise ValueError("cannot return a lease while a node operation is active")
+            raise DomainError("cannot return a lease while a node operation is active")
         if expected_version is not None and item.version != expected_version:
             from .access_store import VersionConflict
             raise VersionConflict(f"expected version {expected_version}, got {item.version}")

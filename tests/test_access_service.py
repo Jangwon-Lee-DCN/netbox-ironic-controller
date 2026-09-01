@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from netbox_ironic_controller.access_domain import AccessRequest, Actor, OfferCandidate, RequestState
+from netbox_ironic_controller.access_domain import AccessRequest, Actor, DomainError, OfferCandidate, RequestState
 from netbox_ironic_controller.access_service import AccessCoordinator
 from netbox_ironic_controller.access_store import AccessStore
 
@@ -121,5 +121,5 @@ async def test_return_rejects_active_node_operation(tmp_path):
     service = AccessCoordinator(store, Inventory(), runtime, "dcn")
     leased = await service.approve("req", ADMIN)
     await service.queue_power("req", REQUESTER, "node-1", "reboot", leased.version)
-    with pytest.raises(ValueError, match="operation is active"):
+    with pytest.raises(DomainError, match="operation is active"):
         await service.return_lease("req", REQUESTER)

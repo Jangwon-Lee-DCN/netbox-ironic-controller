@@ -107,3 +107,13 @@ def test_service_restart_fails_running_operation_closed(tmp_path):
     recovered = AccessStore(path).get_operation("op-1")
     assert recovered.state == OperationState.FAILED
     assert "operator reconciliation required" in recovered.error
+
+
+def test_service_restart_fails_unstarted_queued_operation_closed(tmp_path):
+    path = tmp_path / "access.db"
+    store = AccessStore(path)
+    store.create(make_request("a", "project-a"))
+    store.create_operation(operation())
+    recovered = AccessStore(path).get_operation("op-1")
+    assert recovered.state == OperationState.FAILED
+    assert not AccessStore(path).has_active_operations("a")

@@ -83,9 +83,9 @@ class AccessStore:
             connection.executescript(SCHEMA)
             connection.execute(
                 """UPDATE node_operations SET state='failed', error=?, updated_at=?
-                WHERE state='running'""",
+                WHERE state IN ('queued','running')""",
                 (
-                    "service restarted during operation; operator reconciliation required",
+                    "service restarted before operation completion; operator reconciliation required",
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
