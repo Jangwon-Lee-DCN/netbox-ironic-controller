@@ -1,7 +1,7 @@
 [project]
 name = "netbox-ironic-controller"
-version = "0.5.1"
-description = "Bidirectional inventory synchronization between NetBox and OpenStack Ironic"
+version = "0.6.0"
+description = "NetBox-Ironic synchronization and project-scoped bare metal access workflow"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [

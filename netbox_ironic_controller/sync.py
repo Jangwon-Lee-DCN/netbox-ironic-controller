@@ -97,6 +97,10 @@ class IronicSyncClient:
                 "maintenance": bool(node.is_maintenance),
                 "instance_uuid": node.instance_id,
                 "last_error": node.last_error,
+                "owner": node.owner,
+                "lessee": node.lessee,
+                "resource_class": node.resource_class,
+                "traits": list(node.traits or []),
             }
             for node in nodes
         }
@@ -118,6 +122,31 @@ class IronicSyncClient:
             properties=properties,
         )
         return node.id
+
+    async def assign_lessee(self, node_uuid: str, project_id: str, dcn_project_id: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.owner != dcn_project_id:
+            raise RuntimeError("DCN does not own the requested node")
+        if node.lessee and node.lessee != project_id:
+            raise RuntimeError("node already has another lessee")
+        if node.provision_state != "available" or node.is_maintenance or node.last_error:
+            raise RuntimeError("node is not safe to lease")
+        await to_thread(self.conn.baremetal.update_node, node, lessee=project_id)
+
+    async def return_and_clean(self, node_uuid: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.provision_state == "active":
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "deleted", wait=True, timeout=3600,
+            )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"node did not complete return/cleaning: {node.provision_state}")
+
+    async def clear_lessee(self, node_uuid: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError("lessee cannot be cleared before successful cleaning")
+        await to_thread(self.conn.baremetal.update_node, node, lessee=None)
 
     async def port_addresses(self, node_uuid: str) -> set[str]:
         ports = await to_thread(lambda: list(self.conn.baremetal.ports(node=node_uuid, details=True)))

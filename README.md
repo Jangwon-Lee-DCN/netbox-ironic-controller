@@ -1,6 +1,19 @@
-# NetBox-Ironic Controller
+# DCN Bare Metal Access Service
 
-NetBox를 기준 정보원으로 사용해 OpenStack Ironic의 베어메탈 인벤토리를 동기화하는 Kubernetes 컨트롤러입니다. 웹 대시보드나 사용자 로그인 화면은 제공하지 않습니다.
+NetBox를 물리 자산 기준 정보원으로 사용해 OpenStack Ironic 인벤토리를 동기화하고,
+Keystone 프로젝트별 베어메탈 신청·승인·임대·반납 수명주기를 제공하는 작은
+Kubernetes 서비스입니다. 사용자 화면은 별도 Horizon plugin이 소유하며 이
+서비스는 인증된 JSON API만 제공합니다.
+
+## 접근 모델
+
+- 물리 자산의 Ironic `owner`는 DCN 프로젝트에 유지합니다.
+- 승인된 프로젝트는 기간 제한 `lessee`가 됩니다.
+- 전체 Ironic 작업과 신청 승인은 `dcn` 프로젝트의 `baremetal_admin`만 수행합니다.
+- 일반 프로젝트는 `baremetal_requester` 또는 `baremetal_operator` 역할로 자신의
+  신청과 임대 노드만 볼 수 있습니다.
+- 노드 reservation은 DB 고유 제약과 request version 비교로 중복 승인을 막습니다.
+- 반납과 만료는 Ironic undeploy/cleaning 성공 후에만 lessee와 reservation을 해제합니다.
 
 ## 동기화 방향
 
