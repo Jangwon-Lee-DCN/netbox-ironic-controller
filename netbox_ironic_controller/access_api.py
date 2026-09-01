@@ -166,6 +166,6 @@ def configure_access(app, settings, netbox, ironic) -> None:
     app.state.access_coordinator = AccessCoordinator(
         app.state.access_store,
         NetBoxIronicOfferInventory(netbox, ironic),
-        IronicLeaseAdapter(ironic, settings.access_dcn_project_id),
+        IronicLeaseAdapter(ironic, netbox, settings.access_dcn_project_id),
         settings.access_dcn_project_id,
     )

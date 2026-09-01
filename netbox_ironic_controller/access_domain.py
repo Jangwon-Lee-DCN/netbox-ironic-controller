@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from math import ceil
 
 
 class RequestState(StrEnum):
@@ -45,6 +46,7 @@ class OfferCandidate:
     maintenance: bool
     lessee: str | None
     last_error: str | None
+    max_lease_days: int = 30
 
     @property
     def eligible(self) -> bool:
@@ -82,7 +84,11 @@ class AccessRequest:
         actor.require_admin(dcn_project_id)
         if self.state not in (RequestState.SUBMITTED, RequestState.REVIEWING):
             raise DomainError(f"request cannot be approved from {self.state}")
-        eligible = [node for node in candidates if node.eligible and node.profile == self.profile]
+        remaining_days = max(1, ceil((self.requested_until - datetime.now(timezone.utc)).total_seconds() / 86400))
+        eligible = [
+            node for node in candidates
+            if node.eligible and node.profile == self.profile and node.max_lease_days >= remaining_days
+        ]
         if self.rack:
             eligible = [node for node in eligible if node.rack == self.rack]
         if len(eligible) < self.quantity:

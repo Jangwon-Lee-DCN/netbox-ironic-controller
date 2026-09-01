@@ -192,6 +192,7 @@ class NetBoxIronicController:
                         "ironic_provision_state": node.get("provision_state") or "",
                         "ironic_maintenance": bool(node.get("maintenance")),
                         "ironic_last_error": node.get("last_error") or "",
+                        "baremetal_lessee_project_id": node.get("lessee") or "",
                     })
                     if updated != custom:
                         await self.netbox.patch("dcim/devices", device["id"], {"custom_fields": updated})

@@ -1,4 +1,4 @@
-from netbox_ironic_controller.access_inventory import NetBoxIronicOfferInventory
+from netbox_ironic_controller.access_inventory import IronicLeaseAdapter, NetBoxIronicOfferInventory
 
 
 class NetBox:
@@ -26,3 +26,37 @@ async def test_inventory_does_not_expose_a_different_profile_or_rack():
     inventory = NetBoxIronicOfferInventory(NetBox(), Ironic())
     assert await inventory.candidates("gpu", "Rack 1") == []
     assert await inventory.candidates("general", "Rack 2") == []
+
+
+class LeaseIronic:
+    def __init__(self):
+        self.calls = []
+
+    async def assign_lessee(self, node, project, owner):
+        self.calls.append(("assign", node, project, owner))
+
+    async def clear_lessee(self, node):
+        self.calls.append(("clear", node))
+
+
+class LeaseNetBox:
+    def __init__(self):
+        self.patches = []
+
+    async def all(self, path, params):
+        return [{"id": 7, "custom_fields": {"ironic_node_uuid": "node-1", "keep": "value"}}]
+
+    async def patch(self, path, object_id, payload):
+        self.patches.append((path, object_id, payload))
+
+
+async def test_lease_adapter_mirrors_runtime_lessee_without_dropping_fields():
+    ironic, netbox = LeaseIronic(), LeaseNetBox()
+    adapter = IronicLeaseAdapter(ironic, netbox, "dcn")
+    await adapter.assign_lessee("node-1", "tenant-a")
+    await adapter.clear_lessee("node-1")
+    assert ironic.calls == [("assign", "node-1", "tenant-a", "dcn"), ("clear", "node-1")]
+    assert netbox.patches[0][2]["custom_fields"] == {
+        "ironic_node_uuid": "node-1", "keep": "value", "baremetal_lessee_project_id": "tenant-a",
+    }
+    assert netbox.patches[1][2]["custom_fields"]["baremetal_lessee_project_id"] == ""

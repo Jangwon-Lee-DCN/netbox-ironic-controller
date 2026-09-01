@@ -89,3 +89,9 @@ def test_request_can_be_rejected_or_cancelled_only_before_allocation():
     cancelled = request()
     cancelled.cancel(REQUESTER)
     assert cancelled.state == RequestState.CANCELLED
+
+
+def test_approval_respects_per_node_lease_limit():
+    item = request()
+    with pytest.raises(DomainError, match="not enough eligible"):
+        item.approve(ADMIN, DCN, [candidate(max_lease_days=3)])
