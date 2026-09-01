@@ -75,12 +75,15 @@ class IronicSyncClient:
     def __init__(self, settings: Settings):
         from openstack import connection
 
+        scope = ({"project_id": settings.openstack_project_id}
+                 if settings.openstack_project_id
+                 else {"system_scope": settings.openstack_system_scope})
         self.conn = connection.Connection(
             auth_url=settings.openstack_auth_url,
             username=settings.openstack_username,
             password=settings.openstack_password,
             user_domain_name=settings.openstack_user_domain_name,
-            system_scope=settings.openstack_system_scope,
+            **scope,
             region_name=settings.openstack_region,
             interface=settings.openstack_interface,
             identity_api_version="3",

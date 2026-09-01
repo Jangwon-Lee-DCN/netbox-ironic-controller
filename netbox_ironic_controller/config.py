@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     openstack_password: str = ""
     openstack_user_domain_name: str = "Default"
     openstack_system_scope: str = "all"
+    openstack_project_id: str = ""
     openstack_interface: str = "internal"
     sync_enabled: bool = False
     sync_interval_seconds: int = 60
