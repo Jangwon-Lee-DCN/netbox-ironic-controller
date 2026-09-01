@@ -13,10 +13,11 @@ from .sync import IronicSyncClient, KubernetesSecretStore, NetBoxIronicControlle
 async def reconcile_loop(app: FastAPI) -> None:
     while True:
         try:
-            result = await app.state.controller.reconcile()
-            app.state.last_result = result.__dict__
-            app.state.last_success = datetime.now(timezone.utc).isoformat()
-            app.state.last_error = None
+            if app.state.settings.sync_enabled:
+                result = await app.state.controller.reconcile()
+                app.state.last_result = result.__dict__
+                app.state.last_success = datetime.now(timezone.utc).isoformat()
+                app.state.last_error = None
             if app.state.settings.access_enabled:
                 service_actor = Actor("baremetal-access-service", app.state.settings.access_dcn_project_id,
                                       frozenset({"baremetal_admin"}))
@@ -58,6 +59,8 @@ async def healthz():
 
 @app.post("/reconcile")
 async def reconcile():
+    if not app.state.settings.sync_enabled:
+        raise HTTPException(status_code=409, detail="inventory synchronization is disabled")
     try:
         result = await app.state.controller.reconcile()
         app.state.last_result = result.__dict__
