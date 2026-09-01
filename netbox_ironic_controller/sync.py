@@ -133,6 +133,21 @@ class IronicSyncClient:
             raise RuntimeError("node is not safe to lease")
         await to_thread(self.conn.baremetal.update_node, node, lessee=project_id)
 
+    async def prepare_access_fixture(self, node_uuid: str, dcn_project_id: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.is_maintenance or node.last_error or node.lessee:
+            raise RuntimeError("fixture node is not safe to prepare")
+        if node.provision_state == "active":
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "deleted",
+                wait=True, timeout=3600,
+            )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"fixture node did not become available: {node.provision_state}")
+        await to_thread(
+            self.conn.baremetal.update_node, node, owner=dcn_project_id, lessee=None,
+        )
+
     async def return_and_clean(self, node_uuid: str, clean_steps: list[dict]) -> None:
         if not clean_steps:
             raise RuntimeError("manual cleaning steps are required")

@@ -89,3 +89,15 @@ async def test_return_refuses_to_claim_cleaning_without_steps():
     with pytest.raises(RuntimeError, match="manual cleaning steps are required"):
         await runtime.return_and_clean(NODE, [])
     assert runtime.conn.baremetal.calls == []
+
+
+async def test_fixture_preparation_undeploys_and_transfers_owner():
+    runtime = client("active")
+    runtime.conn.baremetal.node.lessee = None
+    await runtime.prepare_access_fixture(NODE, "new-dcn")
+    assert runtime.conn.baremetal.calls == [
+        ("provision", "deleted", {"wait": True, "timeout": 3600}),
+        ("update", {"owner": "new-dcn", "lessee": None}),
+    ]
+    assert runtime.conn.baremetal.node.provision_state == "available"
+    assert runtime.conn.baremetal.node.owner == "new-dcn"
