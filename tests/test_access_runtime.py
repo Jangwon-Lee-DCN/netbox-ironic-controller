@@ -33,6 +33,7 @@ class Baremetal:
         states = {"deleted": "available", "manage": "manageable",
                   "clean": "manageable", "provide": "available", "active": "active"}
         node.provision_state = states[target]
+        if target == "deleted": node.last_error = None
         return node
 
     def set_node_power_state(self, node, target, **kwargs):
@@ -113,3 +114,16 @@ async def test_fixture_preparation_undeploys_and_transfers_owner():
     ]
     assert runtime.conn.baremetal.node.provision_state == "available"
     assert runtime.conn.baremetal.node.owner == "new-dcn"
+
+
+async def test_fixture_preparation_recovers_failed_deploy_and_stale_lessee():
+    runtime = client("deploy failed")
+    runtime.conn.baremetal.node.last_error = "image unavailable"
+    await runtime.prepare_access_fixture(NODE, OWNER)
+    assert runtime.conn.baremetal.calls == [
+        ("provision", "deleted", {"wait": True, "timeout": 3600}),
+        ("update", {"owner": OWNER, "lessee": None}),
+    ]
+    assert runtime.conn.baremetal.node.provision_state == "available"
+    assert runtime.conn.baremetal.node.last_error is None
+    assert runtime.conn.baremetal.node.lessee is None

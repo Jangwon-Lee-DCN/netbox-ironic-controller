@@ -136,9 +136,9 @@ class IronicSyncClient:
 
     async def prepare_access_fixture(self, node_uuid: str, dcn_project_id: str) -> None:
         node = await to_thread(self.conn.baremetal.get_node, node_uuid)
-        if node.is_maintenance or node.last_error or node.lessee:
+        if node.is_maintenance:
             raise RuntimeError("fixture node is not safe to prepare")
-        if node.provision_state == "active":
+        if node.provision_state in {"active", "deploy failed"}:
             node = await to_thread(
                 self.conn.baremetal.set_node_provision_state, node, "deleted",
                 wait=True, timeout=3600,
