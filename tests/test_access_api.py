@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+import asyncio
 
 from netbox_ironic_controller.access_api import router
 from netbox_ironic_controller.access_domain import Actor
@@ -150,12 +151,35 @@ async def test_only_lessee_operator_can_call_deploy_and_power_endpoints(tmp_path
             f"/v1/requests/{created['id']}/deploy",
             headers={"X-Auth-Token": "tenant-a"}, json=payload,
         )).status_code == 409
-        assert (await api.post(
+        deploy = await api.post(
             f"/v1/requests/{created['id']}/deploy",
             headers={"X-Auth-Token": "tenant-op"}, json=payload,
-        )).status_code == 200
-        assert (await api.post(
+        )
+        assert deploy.status_code == 202
+        assert deploy.json()["operation"] == "deploy"
+        for _ in range(100):
+            operations = await api.get(
+                f"/v1/requests/{created['id']}/operations",
+                headers={"X-Auth-Token": "tenant-op"},
+            )
+            if operations.json()[0]["state"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        assert operations.json()[0]["state"] == "succeeded"
+        power = await api.post(
             f"/v1/requests/{created['id']}/power",
             headers={"X-Auth-Token": "tenant-op"},
             json={"version": leased["version"], "node_uuid": NODE_ID, "action": "reboot"},
-        )).status_code == 200
+        )
+        assert power.status_code == 202
+        for _ in range(100):
+            operations = await api.get(
+                f"/v1/requests/{created['id']}/operations",
+                headers={"X-Auth-Token": "tenant-op"},
+            )
+            if len(operations.json()) == 2 and operations.json()[1]["state"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        assert operations.status_code == 200
+        assert [item["operation"] for item in operations.json()] == ["deploy", "power"]
+        assert all(item["state"] == "succeeded" for item in operations.json())

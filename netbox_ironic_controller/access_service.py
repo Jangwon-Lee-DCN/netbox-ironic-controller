@@ -3,9 +3,11 @@ from __future__ import annotations
 from asyncio import to_thread
 from datetime import datetime, timezone
 from typing import Protocol
+from uuid import uuid4
 
 from .access_domain import AccessRequest, Actor, OfferCandidate, RequestState
 from .access_store import AccessStore
+from .access_operations import NodeOperation, OperationState
 
 
 class Inventory(Protocol):
@@ -67,6 +69,8 @@ class AccessCoordinator:
     async def return_lease(self, request_id: str, actor: Actor,
                            expected_version: int | None = None) -> AccessRequest:
         item = await to_thread(self.store.get, request_id)
+        if await to_thread(self.store.has_active_operations, request_id):
+            raise ValueError("cannot return a lease while a node operation is active")
         if expected_version is not None and item.version != expected_version:
             from .access_store import VersionConflict
             raise VersionConflict(f"expected version {expected_version}, got {item.version}")
@@ -127,27 +131,54 @@ class AccessCoordinator:
             completed.append(request_id)
         return completed
 
-    async def deploy(self, request_id: str, actor: Actor, node_uuid: str,
-                     image_id: str, config_drive: dict, expected_version: int) -> AccessRequest:
+    async def queue_deploy(self, request_id: str, actor: Actor, node_uuid: str,
+                           image_id: str, config_drive: dict,
+                           expected_version: int) -> NodeOperation:
         item = await to_thread(self.store.get, request_id)
         self._require_lessee(item, actor, node_uuid, expected_version)
-        await self.runtime.deploy(node_uuid, item.project_id, image_id, config_drive)
-        await to_thread(
-            self.store.record_action, item, actor.user_id, actor.project_id,
-            f"deploy:{node_uuid}:{image_id}",
+        return await self._queue_operation(
+            item, actor, node_uuid, "deploy", {"image_id": image_id, "config_drive": config_drive},
         )
-        return item
 
-    async def set_power(self, request_id: str, actor: Actor, node_uuid: str,
-                        action: str, expected_version: int) -> AccessRequest:
+    async def queue_power(self, request_id: str, actor: Actor, node_uuid: str,
+                          action: str, expected_version: int) -> NodeOperation:
         item = await to_thread(self.store.get, request_id)
         self._require_lessee(item, actor, node_uuid, expected_version)
-        await self.runtime.set_power(node_uuid, item.project_id, action)
+        return await self._queue_operation(item, actor, node_uuid, "power", {"action": action})
+
+    async def _queue_operation(self, item: AccessRequest, actor: Actor, node_uuid: str,
+                               operation_type: str, payload: dict) -> NodeOperation:
+        now = datetime.now(timezone.utc)
+        operation = NodeOperation(
+            id=str(uuid4()), request_id=item.id, project_id=item.project_id,
+            user_id=actor.user_id, node_uuid=node_uuid, operation=operation_type,
+            payload=payload, state=OperationState.QUEUED, error=None, created_at=now, updated_at=now,
+        )
+        await to_thread(self.store.create_operation, operation)
         await to_thread(
             self.store.record_action, item, actor.user_id, actor.project_id,
-            f"power:{node_uuid}:{action}",
+            f"operation_queued:{operation_type}:{node_uuid}",
         )
-        return item
+        return operation
+
+    async def process_operation(self, operation_id: str) -> NodeOperation:
+        operation = await to_thread(self.store.start_operation, operation_id)
+        try:
+            if operation.operation == "deploy":
+                await self.runtime.deploy(
+                    operation.node_uuid, operation.project_id, operation.payload["image_id"],
+                    operation.payload["config_drive"],
+                )
+            elif operation.operation == "power":
+                await self.runtime.set_power(
+                    operation.node_uuid, operation.project_id, operation.payload["action"],
+                )
+            else:
+                raise ValueError("unsupported queued operation")
+        except Exception as exc:
+            await to_thread(self.store.finish_operation, operation.id, str(exc))
+            raise
+        return await to_thread(self.store.finish_operation, operation.id)
 
     @staticmethod
     def _require_lessee(item: AccessRequest, actor: Actor, node_uuid: str,

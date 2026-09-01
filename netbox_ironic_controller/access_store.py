@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .access_domain import AccessRequest, DomainError, RequestState
+from .access_operations import NodeOperation, OperationState
 
 
 SCHEMA = """
@@ -49,6 +50,19 @@ CREATE TABLE IF NOT EXISTS request_idempotency (
   request_id TEXT NOT NULL REFERENCES access_requests(id),
   PRIMARY KEY(project_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS node_operations (
+  id TEXT PRIMARY KEY,
+  request_id TEXT NOT NULL REFERENCES access_requests(id),
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  node_uuid TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  state TEXT NOT NULL,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -67,6 +81,14 @@ class AccessStore:
         self.path = str(path)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            connection.execute(
+                """UPDATE node_operations SET state='failed', error=?, updated_at=?
+                WHERE state='running'""",
+                (
+                    "service restarted during operation; operator reconciliation required",
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
 
     def create(self, request: AccessRequest) -> None:
         self.create_idempotent(request, None)
@@ -188,6 +210,80 @@ class AccessStore:
             if current.version != request.version:
                 raise VersionConflict("request was changed concurrently")
             self._audit(connection, current, current, actor_user_id, actor_project_id, action)
+
+    def create_operation(self, operation: NodeOperation) -> None:
+        with self._transaction() as connection:
+            active = connection.execute(
+                "SELECT id FROM node_operations WHERE node_uuid=? AND state IN ('queued','running')",
+                (operation.node_uuid,),
+            ).fetchone()
+            if active:
+                raise DomainError("node already has an active operation")
+            connection.execute(
+                "INSERT INTO node_operations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (operation.id, operation.request_id, operation.project_id, operation.user_id,
+                 operation.node_uuid, operation.operation, json.dumps(operation.payload, sort_keys=True),
+                 operation.state, operation.error, operation.created_at.isoformat(),
+                 operation.updated_at.isoformat()),
+            )
+
+    def get_operation(self, operation_id: str) -> NodeOperation:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM node_operations WHERE id=?", (operation_id,)).fetchone()
+        if row is None:
+            raise KeyError(operation_id)
+        return self._operation_from_row(row)
+
+    def list_operations(self, request_id: str, project_id: str | None = None) -> list[NodeOperation]:
+        query, values = "SELECT * FROM node_operations WHERE request_id=?", [request_id]
+        if project_id is not None:
+            query += " AND project_id=?"
+            values.append(project_id)
+        query += " ORDER BY created_at"
+        with self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._operation_from_row(row) for row in rows]
+
+    def has_active_operations(self, request_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT 1 FROM node_operations
+                WHERE request_id=? AND state IN ('queued','running') LIMIT 1""",
+                (request_id,),
+            ).fetchone()
+        return row is not None
+
+    def start_operation(self, operation_id: str) -> NodeOperation:
+        with self._transaction() as connection:
+            changed = connection.execute(
+                "UPDATE node_operations SET state='running',updated_at=? WHERE id=? AND state='queued'",
+                (datetime.now(timezone.utc).isoformat(), operation_id),
+            )
+            if changed.rowcount != 1:
+                raise VersionConflict("operation is no longer queued")
+            row = connection.execute("SELECT * FROM node_operations WHERE id=?", (operation_id,)).fetchone()
+        return self._operation_from_row(row)
+
+    def finish_operation(self, operation_id: str, error: str | None = None) -> NodeOperation:
+        state = OperationState.FAILED if error else OperationState.SUCCEEDED
+        with self._transaction() as connection:
+            changed = connection.execute(
+                "UPDATE node_operations SET state=?,error=?,updated_at=? WHERE id=? AND state='running'",
+                (state, error[:1000] if error else None, datetime.now(timezone.utc).isoformat(), operation_id),
+            )
+            if changed.rowcount != 1:
+                raise VersionConflict("operation is no longer running")
+            row = connection.execute("SELECT * FROM node_operations WHERE id=?", (operation_id,)).fetchone()
+        return self._operation_from_row(row)
+
+    @staticmethod
+    def _operation_from_row(row: sqlite3.Row) -> NodeOperation:
+        return NodeOperation(
+            id=row["id"], request_id=row["request_id"], project_id=row["project_id"],
+            user_id=row["user_id"], node_uuid=row["node_uuid"], operation=row["operation"],
+            payload=json.loads(row["payload_json"]), state=OperationState(row["state"]), error=row["error"],
+            created_at=datetime.fromisoformat(row["created_at"]), updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
 
     @contextmanager
     def _transaction(self):

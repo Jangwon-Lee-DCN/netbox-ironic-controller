@@ -91,15 +91,17 @@ async def test_only_lessee_operator_can_deploy_and_power_assigned_node(tmp_path)
     seed(store)
     service = AccessCoordinator(store, Inventory(), runtime, "dcn")
     leased = await service.approve("req", ADMIN)
-    await service.deploy(
+    deploy = await service.queue_deploy(
         "req", REQUESTER, "node-1", "image-1",
         {"meta_data": {"local-hostname": "node"}}, leased.version,
     )
-    await service.set_power("req", REQUESTER, "node-1", "reboot", leased.version)
+    await service.process_operation(deploy.id)
+    power = await service.queue_power("req", REQUESTER, "node-1", "reboot", leased.version)
+    await service.process_operation(power.id)
     assert runtime.calls[-2][0:4] == ("deploy", "node-1", "tenant-a", "image-1")
     assert runtime.calls[-1] == ("power", "node-1", "tenant-a", "reboot")
     assert [event["action"] for event in store.audit_events("req")][-2:] == [
-        "deploy:node-1:image-1", "power:node-1:reboot",
+        "operation_queued:deploy:node-1", "operation_queued:power:node-1",
     ]
 
 
@@ -110,4 +112,14 @@ async def test_requester_without_operator_role_cannot_mutate_node(tmp_path):
     leased = await service.approve("req", ADMIN)
     viewer = Actor("viewer", "tenant-a", frozenset({"baremetal_requester"}))
     with pytest.raises(ValueError, match="baremetal_operator"):
-        await service.set_power("req", viewer, "node-1", "reboot", leased.version)
+        await service.queue_power("req", viewer, "node-1", "reboot", leased.version)
+
+
+async def test_return_rejects_active_node_operation(tmp_path):
+    store, runtime = AccessStore(tmp_path / "db"), Runtime()
+    seed(store)
+    service = AccessCoordinator(store, Inventory(), runtime, "dcn")
+    leased = await service.approve("req", ADMIN)
+    await service.queue_power("req", REQUESTER, "node-1", "reboot", leased.version)
+    with pytest.raises(ValueError, match="operation is active"):
+        await service.return_lease("req", REQUESTER)

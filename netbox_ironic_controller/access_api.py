@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from asyncio import to_thread
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from .access_auth import KeystoneTokenValidator
 from .access_domain import AccessRequest, Actor, DomainError, RequestState
 from .access_store import AccessStore
 from .access_store import NodeAlreadyReserved, VersionConflict
+from .access_operations import NodeOperation, OperationState
 
 
 router = APIRouter(prefix="/v1", tags=["baremetal-access"])
@@ -47,6 +49,17 @@ class OfferView(BaseModel):
 class DeployImageView(BaseModel):
     id: str
     name: str
+
+
+class OperationView(BaseModel):
+    id: str
+    request_id: str
+    node_uuid: str
+    operation: str
+    state: OperationState
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class VersionedAction(BaseModel):
@@ -92,6 +105,25 @@ def view(item: AccessRequest, actor: Actor, dcn_project_id: str) -> RequestView:
         purpose=item.purpose, requested_until=item.requested_until, rack=item.rack,
         state=item.state, nodes=nodes, version=item.version,
     )
+
+
+def operation_view(item: NodeOperation) -> OperationView:
+    return OperationView(
+        id=item.id, request_id=item.request_id, node_uuid=item.node_uuid,
+        operation=item.operation, state=item.state, error=item.error,
+        created_at=item.created_at, updated_at=item.updated_at,
+    )
+
+
+def start_operation(request: Request, operation_id: str) -> None:
+    task = asyncio.create_task(request.app.state.access_coordinator.process_operation(operation_id))
+    tasks = getattr(request.app.state, "access_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state.access_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    task.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
 
 
 @router.post("/requests", response_model=RequestView, status_code=201)
@@ -209,32 +241,48 @@ async def reject_request(request_id: str, payload: DecisionAction, request: Requ
     return view(item, actor, settings.access_dcn_project_id)
 
 
-@router.post("/requests/{request_id}/deploy", response_model=RequestView)
+@router.post("/requests/{request_id}/deploy", response_model=OperationView, status_code=202)
 async def deploy_node(request_id: str, payload: DeployAction, request: Request,
-                      actor: Actor = Depends(current_actor)) -> RequestView:
-    settings = request.app.state.settings
+                      actor: Actor = Depends(current_actor)) -> OperationView:
     try:
-        item = await request.app.state.access_coordinator.deploy(
+        item = await request.app.state.access_coordinator.queue_deploy(
             request_id, actor, payload.node_uuid, payload.image_id,
             {"meta_data": {"instance-id": payload.node_uuid, "local-hostname": payload.hostname},
              "user_data": payload.user_data}, payload.version,
         )
     except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return view(item, actor, settings.access_dcn_project_id)
+    start_operation(request, item.id)
+    return operation_view(item)
 
 
-@router.post("/requests/{request_id}/power", response_model=RequestView)
+@router.post("/requests/{request_id}/power", response_model=OperationView, status_code=202)
 async def power_node(request_id: str, payload: PowerAction, request: Request,
-                     actor: Actor = Depends(current_actor)) -> RequestView:
-    settings = request.app.state.settings
+                     actor: Actor = Depends(current_actor)) -> OperationView:
     try:
-        item = await request.app.state.access_coordinator.set_power(
+        item = await request.app.state.access_coordinator.queue_power(
             request_id, actor, payload.node_uuid, payload.action, payload.version,
         )
     except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return view(item, actor, settings.access_dcn_project_id)
+    start_operation(request, item.id)
+    return operation_view(item)
+
+
+@router.get("/requests/{request_id}/operations", response_model=list[OperationView])
+async def list_node_operations(request_id: str, request: Request,
+                               actor: Actor = Depends(current_actor)) -> list[OperationView]:
+    require_requester(actor)
+    try:
+        item = await to_thread(request.app.state.access_store.get, request_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="request not found") from exc
+    if item.project_id != actor.project_id:
+        raise HTTPException(status_code=404, detail="request not found")
+    rows = await to_thread(
+        request.app.state.access_store.list_operations, request_id, actor.project_id,
+    )
+    return [operation_view(row) for row in rows]
 
 
 def configure_access(app, settings, netbox, ironic) -> None:
@@ -242,6 +290,7 @@ def configure_access(app, settings, netbox, ironic) -> None:
     from .access_service import AccessCoordinator
 
     app.state.access_store = AccessStore(settings.access_database_path)
+    app.state.access_tasks = set()
     app.state.access_auth = KeystoneTokenValidator(settings)
     app.state.access_coordinator = AccessCoordinator(
         app.state.access_store,
