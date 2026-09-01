@@ -146,6 +146,11 @@ class IronicSyncClient:
                 self.conn.baremetal.set_node_provision_state, node, "deleted",
                 wait=True, timeout=3600,
             )
+        if node.provision_state == "manageable" and not node.last_error:
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "provide",
+                wait=True, timeout=900,
+            )
         if node.provision_state != "available" or node.last_error:
             raise RuntimeError(f"fixture node did not become available: {node.provision_state}")
         await to_thread(

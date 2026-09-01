@@ -87,7 +87,7 @@ async def test_power_action_maps_to_ironic_target_and_checks_lease():
 
 async def test_return_performs_explicit_manual_clean_before_available():
     runtime = client("active")
-    steps = [{"interface": "deploy", "step": "erase_devices_metadata", "args": {}, "priority": 10}]
+    steps = [{"interface": "deploy", "step": "erase_devices_metadata", "args": {}, "order": 10}]
     await runtime.return_and_clean(NODE, steps)
     calls = runtime.conn.baremetal.calls
     assert [call[1] for call in calls] == ["deleted", "manage", "clean", "provide"]
@@ -109,6 +109,16 @@ async def test_fixture_preparation_undeploys_and_transfers_owner():
     await runtime.prepare_access_fixture(NODE, "new-dcn")
     assert runtime.conn.baremetal.calls == [
         ("provision", "deleted", {"wait": True, "timeout": 3600}),
+        ("update", {"owner": "new-dcn", "lessee": None}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fixture_preparation_recovers_manageable_node():
+    runtime = client("manageable")
+    await runtime.prepare_access_fixture(NODE, "new-dcn")
+    assert runtime.conn.baremetal.calls == [
+        ("provision", "provide", {"wait": True, "timeout": 900}),
         ("update", {"owner": "new-dcn", "lessee": None}),
     ]
     assert runtime.conn.baremetal.node.provision_state == "available"
