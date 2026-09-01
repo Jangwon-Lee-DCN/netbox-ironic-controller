@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS access_audit_events (
   after_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS request_idempotency (
+  project_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_id TEXT NOT NULL REFERENCES access_requests(id),
+  PRIMARY KEY(project_id, idempotency_key)
+);
 """
 
 
@@ -63,13 +69,35 @@ class AccessStore:
             connection.executescript(SCHEMA)
 
     def create(self, request: AccessRequest) -> None:
+        self.create_idempotent(request, None)
+
+    def create_idempotent(self, request: AccessRequest, idempotency_key: str | None) -> AccessRequest:
         with self._transaction() as connection:
+            if idempotency_key:
+                existing = connection.execute(
+                    "SELECT request_id FROM request_idempotency WHERE project_id=? AND idempotency_key=?",
+                    (request.project_id, idempotency_key),
+                ).fetchone()
+                if existing:
+                    row = connection.execute(
+                        "SELECT * FROM access_requests WHERE id=?", (existing["request_id"],),
+                    ).fetchone()
+                    return self._from_row(row)
             connection.execute(
                 """INSERT INTO access_requests
                 (id,project_id,user_id,profile,quantity,purpose,requested_until,rack,state,node_uuids,
                  reviewer_id,decision_reason,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 self._values(request),
             )
+            self._audit(
+                connection, None, request, request.user_id, request.project_id, "created",
+            )
+            if idempotency_key:
+                connection.execute(
+                    "INSERT INTO request_idempotency(project_id,idempotency_key,request_id) VALUES(?,?,?)",
+                    (request.project_id, idempotency_key, request.id),
+                )
+            return request
 
     def get(self, request_id: str) -> AccessRequest:
         with self._connect() as connection:
@@ -185,7 +213,7 @@ class AccessStore:
         )
 
     @staticmethod
-    def _audit(connection: sqlite3.Connection, before: AccessRequest, after: AccessRequest,
+    def _audit(connection: sqlite3.Connection, before: AccessRequest | None, after: AccessRequest,
                actor_user_id: str, actor_project_id: str, action: str) -> None:
         connection.execute(
             "INSERT INTO access_audit_events VALUES(?,?,?,?,?,?,?,?)",
@@ -196,6 +224,8 @@ class AccessStore:
         )
 
     @staticmethod
-    def _public_state(request: AccessRequest) -> dict:
+    def _public_state(request: AccessRequest | None) -> dict:
+        if request is None:
+            return {}
         return {"state": str(request.state), "version": request.version,
                 "node_uuids": request.node_uuids, "project_id": request.project_id}

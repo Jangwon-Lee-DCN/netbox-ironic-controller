@@ -23,6 +23,9 @@ def test_project_listing_never_returns_other_projects(tmp_path):
     store.create(make_request("a", "project-a"))
     store.create(make_request("b", "project-b"))
     assert [item.id for item in store.list_for_project("project-a")] == ["a"]
+    created = store.audit_events("a")
+    assert created[0]["action"] == "created"
+    assert created[0]["before_json"] == "{}"
 
 
 def test_node_reservation_is_unique_across_requests(tmp_path):
@@ -48,6 +51,15 @@ def test_stale_version_cannot_overwrite_newer_decision(tmp_path):
     stale.begin_review(ADMIN, "dcn")
     with pytest.raises(VersionConflict):
         store.save(stale, 0, ADMIN.user_id, ADMIN.project_id, "review")
+
+
+def test_request_creation_is_idempotent_within_project(tmp_path):
+    store = AccessStore(tmp_path / "access.db")
+    first = store.create_idempotent(make_request("a", "project-a"), "request-key-123")
+    duplicate = store.create_idempotent(make_request("b", "project-a"), "request-key-123")
+    other_project = store.create_idempotent(make_request("c", "project-b"), "request-key-123")
+    assert duplicate.id == first.id == "a"
+    assert other_project.id == "c"
 
 
 def test_reservation_released_only_after_cleaning_completed(tmp_path):

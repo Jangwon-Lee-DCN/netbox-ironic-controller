@@ -79,6 +79,7 @@ def view(item: AccessRequest, actor: Actor, dcn_project_id: str) -> RequestView:
 
 @router.post("/requests", response_model=RequestView, status_code=201)
 async def create_request(payload: RequestCreate, request: Request,
+                         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                          actor: Actor = Depends(current_actor)) -> RequestView:
     require_requester(actor)
     settings = request.app.state.settings
@@ -90,7 +91,9 @@ async def create_request(payload: RequestCreate, request: Request,
         requested_until=datetime.now(timezone.utc) + timedelta(days=payload.lease_days),
         rack=payload.rack,
     )
-    await to_thread(request.app.state.access_store.create, item)
+    if idempotency_key is not None and not (8 <= len(idempotency_key) <= 128):
+        raise HTTPException(status_code=422, detail="invalid Idempotency-Key")
+    item = await to_thread(request.app.state.access_store.create_idempotent, item, idempotency_key)
     return view(item, actor, settings.access_dcn_project_id)
 
 
