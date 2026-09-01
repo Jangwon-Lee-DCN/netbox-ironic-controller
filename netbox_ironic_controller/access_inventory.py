@@ -29,7 +29,7 @@ class NetBoxIronicOfferInventory:
                 rack=rack_name,
                 profile=custom.get("baremetal_profile") or "",
                 netbox_active=status_value == "active",
-                offer_enabled=custom.get("baremetal_offer_state") == "available",
+                offer_enabled=custom.get("baremetal_offer_enabled") is True,
                 provision_state=node.get("provision_state") or "",
                 maintenance=bool(node.get("maintenance")),
                 lessee=node.get("lessee"),

@@ -6,7 +6,7 @@ class NetBox:
         return [{
             "status": {"value": "active"}, "rack": {"name": "Rack 1"},
             "custom_fields": {"ironic_node_uuid": "node-1", "baremetal_profile": "general",
-                              "baremetal_offer_state": "available"},
+                              "baremetal_offer_enabled": True},
         }]
 
 
