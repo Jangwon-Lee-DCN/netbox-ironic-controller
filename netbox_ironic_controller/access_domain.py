@@ -92,14 +92,34 @@ class AccessRequest:
         self.state = RequestState.APPROVED
         self.version += 1
 
+    def reject(self, actor: Actor, dcn_project_id: str, reason: str) -> None:
+        actor.require_admin(dcn_project_id)
+        if self.state not in (RequestState.SUBMITTED, RequestState.REVIEWING):
+            raise DomainError(f"request cannot be rejected from {self.state}")
+        if not reason.strip():
+            raise DomainError("rejection reason is required")
+        self.state = RequestState.REJECTED
+        self.reviewer_id = actor.user_id
+        self.decision_reason = reason.strip()[:1000]
+        self.version += 1
+
+    def cancel(self, actor: Actor) -> None:
+        if actor.project_id != self.project_id:
+            raise DomainError("requester project is required")
+        if self.state not in (RequestState.SUBMITTED, RequestState.REVIEWING):
+            raise DomainError(f"request cannot be cancelled from {self.state}")
+        self.state = RequestState.CANCELLED
+        self.version += 1
+
     def allocation_started(self) -> None:
         self._transition(RequestState.APPROVED, RequestState.ALLOCATING)
 
     def allocation_completed(self) -> None:
         self._transition(RequestState.ALLOCATING, RequestState.LEASED)
 
-    def request_return(self, actor: Actor) -> None:
-        if actor.project_id != self.project_id and "baremetal_admin" not in actor.roles:
+    def request_return(self, actor: Actor, dcn_project_id: str) -> None:
+        is_admin = actor.project_id == dcn_project_id and "baremetal_admin" in actor.roles
+        if actor.project_id != self.project_id and not is_admin:
             raise DomainError("requester project or baremetal_admin is required")
         self._transition(RequestState.LEASED, RequestState.RETURN_REQUESTED)
 

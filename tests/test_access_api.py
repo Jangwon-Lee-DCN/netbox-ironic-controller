@@ -86,3 +86,22 @@ async def test_approved_node_is_visible_only_to_admin_and_lessee_project(tmp_pat
         other = (await api.get("/v1/requests", headers={"X-Auth-Token": "tenant-b"})).json()
     assert own[0]["nodes"] == ["node-1"]
     assert other == []
+
+
+async def test_admin_reject_and_requester_cancel_are_versioned(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        first = (await submit(api)).json()
+        rejected = await api.post(
+            f"/v1/admin/requests/{first['id']}/reject",
+            headers={"X-Auth-Token": "admin"},
+            json={"version": first["version"], "reason": "maintenance window"},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["state"] == "rejected"
+        second = (await submit(api)).json()
+        cancelled = await api.post(
+            f"/v1/requests/{second['id']}/cancel",
+            headers={"X-Auth-Token": "tenant-a"}, json={"version": second["version"]},
+        )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["state"] == "cancelled"

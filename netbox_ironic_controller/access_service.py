@@ -67,7 +67,7 @@ class AccessCoordinator:
             from .access_store import VersionConflict
             raise VersionConflict(f"expected version {expected_version}, got {item.version}")
         expected = item.version
-        item.request_return(actor)
+        item.request_return(actor, self.dcn_project_id)
         await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id,
                         "return_requested")
         expected = item.version
@@ -89,6 +89,28 @@ class AccessCoordinator:
         item.cleaning_completed()
         await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id,
                         "returned", True)
+        return item
+
+    async def reject(self, request_id: str, actor: Actor, reason: str,
+                     expected_version: int | None = None) -> AccessRequest:
+        item = await to_thread(self.store.get, request_id)
+        if expected_version is not None and item.version != expected_version:
+            from .access_store import VersionConflict
+            raise VersionConflict(f"expected version {expected_version}, got {item.version}")
+        expected = item.version
+        item.reject(actor, self.dcn_project_id, reason)
+        await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id, "rejected")
+        return item
+
+    async def cancel(self, request_id: str, actor: Actor,
+                     expected_version: int | None = None) -> AccessRequest:
+        item = await to_thread(self.store.get, request_id)
+        if expected_version is not None and item.version != expected_version:
+            from .access_store import VersionConflict
+            raise VersionConflict(f"expected version {expected_version}, got {item.version}")
+        expected = item.version
+        item.cancel(actor)
+        await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id, "cancelled")
         return item
 
     async def expire_leases(self, actor: Actor, now: datetime | None = None) -> list[str]:

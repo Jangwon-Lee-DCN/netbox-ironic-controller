@@ -41,6 +41,10 @@ class VersionedAction(BaseModel):
     version: int = Field(ge=0)
 
 
+class DecisionAction(VersionedAction):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 async def current_actor(request: Request, x_auth_token: str = Header(default="")) -> Actor:
     if not getattr(request.app.state, "access_auth", None):
         raise HTTPException(status_code=503, detail="baremetal access is disabled")
@@ -120,7 +124,34 @@ async def return_request(request_id: str, payload: VersionedAction, request: Req
                          actor: Actor = Depends(current_actor)) -> RequestView:
     settings = request.app.state.settings
     try:
+        require_requester(actor)
         item = await request.app.state.access_coordinator.return_lease(request_id, actor, payload.version)
+    except (DomainError, VersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return view(item, actor, settings.access_dcn_project_id)
+
+
+@router.post("/requests/{request_id}/cancel", response_model=RequestView)
+async def cancel_request(request_id: str, payload: VersionedAction, request: Request,
+                         actor: Actor = Depends(current_actor)) -> RequestView:
+    settings = request.app.state.settings
+    try:
+        require_requester(actor)
+        item = await request.app.state.access_coordinator.cancel(request_id, actor, payload.version)
+    except (DomainError, VersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return view(item, actor, settings.access_dcn_project_id)
+
+
+@router.post("/admin/requests/{request_id}/reject", response_model=RequestView)
+async def reject_request(request_id: str, payload: DecisionAction, request: Request,
+                         actor: Actor = Depends(current_actor)) -> RequestView:
+    settings = request.app.state.settings
+    try:
+        actor.require_admin(settings.access_dcn_project_id)
+        item = await request.app.state.access_coordinator.reject(
+            request_id, actor, payload.reason, payload.version,
+        )
     except (DomainError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return view(item, actor, settings.access_dcn_project_id)

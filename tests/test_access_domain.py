@@ -52,7 +52,7 @@ def test_lease_return_requires_cleaning_before_returned():
     item.approve(ADMIN, DCN, [candidate()])
     item.allocation_started()
     item.allocation_completed()
-    item.request_return(REQUESTER)
+    item.request_return(REQUESTER, DCN)
     with pytest.raises(DomainError):
         item.cleaning_completed()
     item.cleaning_started()
@@ -67,5 +67,25 @@ def test_expired_lease_uses_the_same_return_path():
     item.allocation_started()
     item.allocation_completed()
     assert item.expired()
-    item.request_return(ADMIN)
+    item.request_return(ADMIN, DCN)
     assert item.state == RequestState.RETURN_REQUESTED
+
+
+def test_admin_role_outside_dcn_cannot_return_another_projects_node():
+    item = request()
+    item.approve(ADMIN, DCN, [candidate()])
+    item.allocation_started()
+    item.allocation_completed()
+    impostor = Actor("other-admin", "other-project", frozenset({"baremetal_admin"}))
+    with pytest.raises(DomainError, match="requester project or"):
+        item.request_return(impostor, DCN)
+
+
+def test_request_can_be_rejected_or_cancelled_only_before_allocation():
+    rejected = request()
+    rejected.reject(ADMIN, DCN, "capacity reserved for maintenance")
+    assert rejected.state == RequestState.REJECTED
+    assert rejected.decision_reason == "capacity reserved for maintenance"
+    cancelled = request()
+    cancelled.cancel(REQUESTER)
+    assert cancelled.state == RequestState.CANCELLED

@@ -58,7 +58,7 @@ def test_reservation_released_only_after_cleaning_completed(tmp_path):
     store.save_with_reservations(item, 0, ADMIN.user_id, ADMIN.project_id)
     item.allocation_started(); item.allocation_completed()
     store.save(item, 1, ADMIN.user_id, ADMIN.project_id, "leased")
-    item.request_return(ADMIN); item.cleaning_started(); item.cleaning_completed()
+    item.request_return(ADMIN, "dcn"); item.cleaning_started(); item.cleaning_completed()
     store.save(item, 3, ADMIN.user_id, ADMIN.project_id, "cleaned", release_reservations=True)
     replacement = make_request("b", "project-b")
     store.create(replacement)
