@@ -77,6 +77,19 @@ async def test_return_cleans_before_clearing_lessee_and_releasing_node(tmp_path)
     assert runtime.calls[-2:] == [("clean", "node-1"), ("clear", "node-1")]
 
 
+async def test_begin_return_persists_cleaning_before_external_work(tmp_path):
+    store, runtime = AccessStore(tmp_path / "db"), Runtime()
+    seed(store)
+    service = AccessCoordinator(store, Inventory(), runtime, "dcn")
+    await service.approve("req", ADMIN)
+    item = await service.begin_return("req", REQUESTER)
+    assert item.state == RequestState.CLEANING
+    assert store.get("req").state == RequestState.CLEANING
+    assert runtime.calls == [("assign", "node-1", "tenant-a")]
+    completed = await service.complete_return("req", REQUESTER)
+    assert completed.state == RequestState.RETURNED
+
+
 async def test_expiry_uses_return_and_cleaning_path(tmp_path):
     store, runtime = AccessStore(tmp_path / "db"), Runtime()
     seed(store, datetime.now(timezone.utc) - timedelta(seconds=1))

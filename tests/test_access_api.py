@@ -117,6 +117,22 @@ async def test_approved_node_is_visible_only_to_admin_and_lessee_project(tmp_pat
     assert other == []
 
 
+async def test_return_endpoint_accepts_cleaning_asynchronously(tmp_path):
+    application = app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=application), base_url="http://test") as api:
+        created = (await submit(api, "tenant-a")).json()
+        leased = (await api.post(
+            f"/v1/admin/requests/{created['id']}/approve",
+            headers={"X-Auth-Token": "admin"}, json={"version": created["version"]},
+        )).json()
+        response = await api.post(
+            f"/v1/requests/{created['id']}/return",
+            headers={"X-Auth-Token": "tenant-a"}, json={"version": leased["version"]},
+        )
+    assert response.status_code == 202
+    assert application.state.access_store.get(created["id"]).state.value == "returned"
+
+
 async def test_admin_reject_and_requester_cancel_are_versioned(tmp_path):
     async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
         first = (await submit(api)).json()

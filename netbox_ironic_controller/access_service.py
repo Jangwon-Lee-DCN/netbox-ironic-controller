@@ -68,6 +68,11 @@ class AccessCoordinator:
 
     async def return_lease(self, request_id: str, actor: Actor,
                            expected_version: int | None = None) -> AccessRequest:
+        item = await self.begin_return(request_id, actor, expected_version)
+        return await self.complete_return(item.id, actor)
+
+    async def begin_return(self, request_id: str, actor: Actor,
+                           expected_version: int | None = None) -> AccessRequest:
         item = await to_thread(self.store.get, request_id)
         if await to_thread(self.store.has_active_operations, request_id):
             raise DomainError("cannot return a lease while a node operation is active")
@@ -82,6 +87,13 @@ class AccessCoordinator:
         item.cleaning_started()
         await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id,
                         "cleaning_started")
+        return item
+
+    async def complete_return(self, request_id: str, actor: Actor,
+                              raise_on_error: bool = True) -> AccessRequest:
+        item = await to_thread(self.store.get, request_id)
+        if item.state != RequestState.CLEANING:
+            raise DomainError("request is not awaiting cleaning")
         try:
             for node_uuid in item.node_uuids:
                 await self.runtime.return_and_clean(node_uuid)
@@ -92,7 +104,9 @@ class AccessCoordinator:
             item.mark_error(f"return or cleaning failed: {exc}")
             await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id,
                             "cleaning_failed")
-            raise
+            if raise_on_error:
+                raise
+            return item
         expected = item.version
         item.cleaning_completed()
         await to_thread(self.store.save, item, expected, actor.user_id, actor.project_id,

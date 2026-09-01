@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .access_auth import KeystoneTokenValidator
@@ -203,13 +203,16 @@ async def approve_request(request_id: str, payload: VersionedAction, request: Re
     return view(item, actor, settings.access_dcn_project_id)
 
 
-@router.post("/requests/{request_id}/return", response_model=RequestView)
+@router.post("/requests/{request_id}/return", response_model=RequestView, status_code=202)
 async def return_request(request_id: str, payload: VersionedAction, request: Request,
+                         background_tasks: BackgroundTasks,
                          actor: Actor = Depends(current_actor)) -> RequestView:
     settings = request.app.state.settings
     try:
         require_requester(actor)
-        item = await request.app.state.access_coordinator.return_lease(request_id, actor, payload.version)
+        coordinator = request.app.state.access_coordinator
+        item = await coordinator.begin_return(request_id, actor, payload.version)
+        background_tasks.add_task(coordinator.complete_return, request_id, actor, False)
     except (DomainError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return view(item, actor, settings.access_dcn_project_id)
