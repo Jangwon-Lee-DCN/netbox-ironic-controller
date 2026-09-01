@@ -304,8 +304,9 @@ def configure_access(app, settings, netbox, ironic) -> None:
         NetBoxIronicOfferInventory(netbox, ironic),
         IronicLeaseAdapter(
             ironic, netbox, settings.access_dcn_project_id,
-            {value.strip() for value in settings.access_deploy_image_ids.split(",") if value.strip()},
-            json.loads(settings.access_clean_steps_json),
+            deploy_image_ids={value.strip() for value in settings.access_deploy_image_ids.split(",") if value.strip()},
+            clean_steps=json.loads(settings.access_clean_steps_json),
+            deploy_images=json.loads(settings.access_deploy_images_json),
         ),
         settings.access_dcn_project_id,
     )

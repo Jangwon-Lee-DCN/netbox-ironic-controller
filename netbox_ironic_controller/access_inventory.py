@@ -44,12 +44,31 @@ class NetBoxIronicOfferInventory:
 class IronicLeaseAdapter:
     def __init__(self, ironic: IronicSyncClient, netbox: NetBoxSyncClient,
                  dcn_project_id: str, deploy_image_ids: set[str] | None = None,
-                 clean_steps: list[dict] | None = None):
+                 clean_steps: list[dict] | None = None,
+                 deploy_images: list[dict] | None = None):
         self.ironic = ironic
         self.netbox = netbox
         self.dcn_project_id = dcn_project_id
         self.deploy_image_ids = deploy_image_ids or set()
+        self.deploy_images = self._validated_deploy_images(deploy_images or [])
+        self.deploy_image_ids.update(self.deploy_images)
         self.clean_steps = self._validated_clean_steps(clean_steps or [])
+
+    @staticmethod
+    def _validated_deploy_images(images: list[dict]) -> dict[str, dict]:
+        if not isinstance(images, list):
+            raise ValueError("approved deploy images must be a JSON list")
+        result = {}
+        for image in images:
+            if not isinstance(image, dict):
+                raise ValueError("each approved deploy image must be an object")
+            required = ("id", "name", "checksum", "disk_format")
+            if any(not isinstance(image.get(key), str) or not image[key] for key in required):
+                raise ValueError("approved deploy image metadata is incomplete")
+            if image["id"] in result:
+                raise ValueError("approved deploy image IDs must be unique")
+            result[image["id"]] = {key: image[key] for key in required}
+        return result
 
     @staticmethod
     def _validated_clean_steps(steps: list[dict]) -> list[dict]:
@@ -98,10 +117,18 @@ class IronicLeaseAdapter:
                      config_drive: dict) -> None:
         if image_id not in self.deploy_image_ids:
             raise RuntimeError("image is not approved for bare metal deployment")
-        await self.ironic.deploy(node_uuid, project_id, image_id, config_drive, self.dcn_project_id)
+        await self.ironic.deploy(
+            node_uuid, project_id, image_id, config_drive, self.dcn_project_id,
+            self.deploy_images.get(image_id),
+        )
 
     async def set_power(self, node_uuid: str, project_id: str, action: str) -> None:
         await self.ironic.set_power(node_uuid, project_id, action, self.dcn_project_id)
 
     async def approved_images(self) -> list[dict]:
+        if self.deploy_images:
+            return [
+                {"id": image["id"], "name": image["name"]}
+                for image in sorted(self.deploy_images.values(), key=lambda row: row["id"])
+            ]
         return await self.ironic.approved_images(self.deploy_image_ids)

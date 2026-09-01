@@ -62,6 +62,16 @@ async def test_deploy_pins_approved_glance_image_metadata_and_config_drive():
     assert runtime.conn.baremetal.calls[1][2]["config_drive"] == config_drive
 
 
+async def test_deploy_accepts_contract_pinned_image_metadata_without_glance_lookup():
+    runtime = client()
+    runtime.conn.image = None
+    metadata = {"id": IMAGE, "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2"}
+    await runtime.deploy(NODE, PROJECT, IMAGE, {}, OWNER, metadata)
+    assert runtime.conn.baremetal.calls[0] == ("update", {"instance_info": {
+        "image_source": IMAGE, "image_checksum": "abc", "image_disk_format": "qcow2",
+    }})
+
+
 async def test_power_action_maps_to_ironic_target_and_checks_lease():
     runtime = client("active")
     await runtime.set_power(NODE, PROJECT, "soft reboot", OWNER)

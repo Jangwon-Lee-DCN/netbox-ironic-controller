@@ -5,6 +5,7 @@ import json
 from asyncio import to_thread
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol
 
 import httpx
@@ -182,14 +183,18 @@ class IronicSyncClient:
         await to_thread(self.conn.baremetal.update_node, node, lessee=None)
 
     async def deploy(self, node_uuid: str, project_id: str, image_id: str,
-                     config_drive: dict, dcn_project_id: str) -> None:
+                     config_drive: dict, dcn_project_id: str,
+                     image_metadata: dict | None = None) -> None:
         node = await to_thread(self.conn.baremetal.get_node, node_uuid)
         self._require_leased_node(node, project_id, dcn_project_id)
         if node.provision_state != "available":
             raise RuntimeError("only an available leased node can be deployed")
-        image = await to_thread(self.conn.image.get_image, image_id)
-        if not image or not image.checksum or not image.disk_format:
-            raise RuntimeError("approved image metadata is incomplete")
+        if image_metadata:
+            image = SimpleNamespace(**image_metadata)
+        else:
+            image = await to_thread(self.conn.image.get_image, image_id)
+            if not image or not image.checksum or not image.disk_format:
+                raise RuntimeError("approved image metadata is incomplete")
         instance_info = {
             "image_source": image.id,
             "image_checksum": image.checksum,

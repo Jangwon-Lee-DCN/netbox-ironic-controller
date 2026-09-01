@@ -67,3 +67,21 @@ async def test_lease_adapter_mirrors_runtime_lessee_without_dropping_fields():
 def test_lease_adapter_rejects_malformed_manual_clean_steps():
     with pytest.raises(ValueError, match="interface is invalid"):
         IronicLeaseAdapter(LeaseIronic(), LeaseNetBox(), "dcn", clean_steps=[{"step": "erase"}])
+
+
+async def test_lease_adapter_returns_and_deploys_contract_pinned_images():
+    class ImageIronic(LeaseIronic):
+        async def deploy(self, *args):
+            self.calls.append(("deploy", args))
+
+    image = {"id": "image-1", "name": "Ubuntu", "checksum": "abc", "disk_format": "qcow2"}
+    ironic = ImageIronic()
+    adapter = IronicLeaseAdapter(ironic, LeaseNetBox(), "dcn", deploy_images=[image])
+    assert await adapter.approved_images() == [{"id": "image-1", "name": "Ubuntu"}]
+    await adapter.deploy("node-1", "tenant-a", "image-1", {})
+    assert ironic.calls == [("deploy", ("node-1", "tenant-a", "image-1", {}, "dcn", image))]
+
+
+def test_lease_adapter_rejects_incomplete_contract_image_metadata():
+    with pytest.raises(ValueError, match="metadata is incomplete"):
+        IronicLeaseAdapter(LeaseIronic(), LeaseNetBox(), "dcn", deploy_images=[{"id": "image-1"}])
