@@ -8,7 +8,7 @@ from .sync import IronicSyncClient, NetBoxSyncClient
 
 
 async def prepare_fixture(netbox, ironic, node_uuid: str, dcn_project_id: str,
-                          profile: str, max_lease_days: int) -> None:
+                          profile: str, rack: str, max_lease_days: int) -> None:
     expected = f"destroy:{node_uuid}"
     if os.environ.get("RACKD_ACCESS_FIXTURE_CONFIRM") != expected:
         raise RuntimeError(f"RACKD_ACCESS_FIXTURE_CONFIRM must equal {expected}")
@@ -19,6 +19,10 @@ async def prepare_fixture(netbox, ironic, node_uuid: str, dcn_project_id: str,
     ]
     if len(matches) != 1:
         raise RuntimeError(f"expected one NetBox device for fixture, got {len(matches)}")
+    racks = await netbox.all("dcim/racks/", {"name": rack, "limit": 2})
+    racks = [item for item in racks if item.get("name") == rack]
+    if len(racks) != 1:
+        raise RuntimeError(f"expected one NetBox rack named {rack}, got {len(racks)}")
     await ironic.prepare_access_fixture(node_uuid, dcn_project_id)
     device = matches[0]
     custom = dict(device.get("custom_fields") or {})
@@ -28,7 +32,9 @@ async def prepare_fixture(netbox, ironic, node_uuid: str, dcn_project_id: str,
         "baremetal_max_lease_days": max_lease_days,
         "baremetal_lessee_project_id": "",
     })
-    await netbox.patch("dcim/devices", device["id"], {"custom_fields": custom})
+    await netbox.patch("dcim/devices", device["id"], {
+        "status": "active", "rack": racks[0]["id"], "custom_fields": custom,
+    })
 
 
 async def main() -> None:
@@ -36,12 +42,13 @@ async def main() -> None:
     node_uuid = os.environ["RACKD_ACCESS_FIXTURE_NODE_UUID"]
     dcn_project_id = os.environ["RACKD_ACCESS_DCN_PROJECT_ID"]
     profile = os.environ["RACKD_ACCESS_FIXTURE_PROFILE"]
+    rack = os.environ["RACKD_ACCESS_FIXTURE_RACK"]
     max_lease_days = int(os.environ.get("RACKD_ACCESS_FIXTURE_MAX_LEASE_DAYS", "1"))
     if not 1 <= max_lease_days <= settings.access_max_lease_days:
         raise RuntimeError("fixture maximum lease days is outside the access policy")
     await prepare_fixture(
         NetBoxSyncClient(settings), IronicSyncClient(settings), node_uuid,
-        dcn_project_id, profile, max_lease_days,
+        dcn_project_id, profile, rack, max_lease_days,
     )
 
 
