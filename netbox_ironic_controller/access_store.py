@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS node_operations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS operation_idempotency (
+  project_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  operation_id TEXT NOT NULL REFERENCES node_operations(id),
+  PRIMARY KEY(project_id, operation, idempotency_key)
+);
 """
 
 
@@ -212,7 +219,27 @@ class AccessStore:
             self._audit(connection, current, current, actor_user_id, actor_project_id, action)
 
     def create_operation(self, operation: NodeOperation) -> None:
+        self.create_operation_idempotent(operation, None)
+
+    def create_operation_idempotent(self, operation: NodeOperation,
+                                    idempotency_key: str | None) -> NodeOperation:
         with self._transaction() as connection:
+            if idempotency_key:
+                existing = connection.execute(
+                    """SELECT operation_id FROM operation_idempotency
+                    WHERE project_id=? AND operation=? AND idempotency_key=?""",
+                    (operation.project_id, operation.operation, idempotency_key),
+                ).fetchone()
+                if existing:
+                    row = connection.execute(
+                        "SELECT * FROM node_operations WHERE id=?", (existing["operation_id"],),
+                    ).fetchone()
+                    current = self._operation_from_row(row)
+                    if (current.request_id, current.node_uuid, current.payload) != (
+                        operation.request_id, operation.node_uuid, operation.payload,
+                    ):
+                        raise DomainError("Idempotency-Key was reused with a different operation")
+                    return current
             active = connection.execute(
                 "SELECT id FROM node_operations WHERE node_uuid=? AND state IN ('queued','running')",
                 (operation.node_uuid,),
@@ -226,6 +253,12 @@ class AccessStore:
                  operation.state, operation.error, operation.created_at.isoformat(),
                  operation.updated_at.isoformat()),
             )
+            if idempotency_key:
+                connection.execute(
+                    "INSERT INTO operation_idempotency VALUES(?,?,?,?)",
+                    (operation.project_id, operation.operation, idempotency_key, operation.id),
+                )
+        return operation
 
     def get_operation(self, operation_id: str) -> NodeOperation:
         with self._connect() as connection:

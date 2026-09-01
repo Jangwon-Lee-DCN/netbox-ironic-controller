@@ -117,3 +117,15 @@ def test_service_restart_fails_unstarted_queued_operation_closed(tmp_path):
     recovered = AccessStore(path).get_operation("op-1")
     assert recovered.state == OperationState.FAILED
     assert not AccessStore(path).has_active_operations("a")
+
+
+def test_node_operation_creation_is_idempotent_and_payload_bound(tmp_path):
+    store = AccessStore(tmp_path / "access.db")
+    store.create(make_request("a", "project-a"))
+    first = store.create_operation_idempotent(operation(), "operation-key")
+    duplicate = store.create_operation_idempotent(operation("op-2"), "operation-key")
+    assert duplicate.id == first.id == "op-1"
+    changed = operation("op-3")
+    changed.payload = {"action": "off"}
+    with pytest.raises(DomainError, match="reused with a different operation"):
+        store.create_operation_idempotent(changed, "operation-key")

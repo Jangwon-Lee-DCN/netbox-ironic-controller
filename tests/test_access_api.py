@@ -153,10 +153,18 @@ async def test_only_lessee_operator_can_call_deploy_and_power_endpoints(tmp_path
         )).status_code == 409
         deploy = await api.post(
             f"/v1/requests/{created['id']}/deploy",
-            headers={"X-Auth-Token": "tenant-op"}, json=payload,
+            headers={"X-Auth-Token": "tenant-op", "Idempotency-Key": "deploy-operation-key"},
+            json=payload,
         )
         assert deploy.status_code == 202
         assert deploy.json()["operation"] == "deploy"
+        duplicate = await api.post(
+            f"/v1/requests/{created['id']}/deploy",
+            headers={"X-Auth-Token": "tenant-op", "Idempotency-Key": "deploy-operation-key"},
+            json=payload,
+        )
+        assert duplicate.status_code == 202
+        assert duplicate.json()["id"] == deploy.json()["id"]
         for _ in range(100):
             operations = await api.get(
                 f"/v1/requests/{created['id']}/operations",

@@ -133,33 +133,42 @@ class AccessCoordinator:
 
     async def queue_deploy(self, request_id: str, actor: Actor, node_uuid: str,
                            image_id: str, config_drive: dict,
-                           expected_version: int) -> NodeOperation:
+                           expected_version: int, idempotency_key: str | None = None) -> NodeOperation:
         item = await to_thread(self.store.get, request_id)
         self._require_lessee(item, actor, node_uuid, expected_version)
         return await self._queue_operation(
             item, actor, node_uuid, "deploy", {"image_id": image_id, "config_drive": config_drive},
+            idempotency_key,
         )
 
     async def queue_power(self, request_id: str, actor: Actor, node_uuid: str,
-                          action: str, expected_version: int) -> NodeOperation:
+                          action: str, expected_version: int,
+                          idempotency_key: str | None = None) -> NodeOperation:
         item = await to_thread(self.store.get, request_id)
         self._require_lessee(item, actor, node_uuid, expected_version)
-        return await self._queue_operation(item, actor, node_uuid, "power", {"action": action})
+        return await self._queue_operation(
+            item, actor, node_uuid, "power", {"action": action}, idempotency_key,
+        )
 
     async def _queue_operation(self, item: AccessRequest, actor: Actor, node_uuid: str,
-                               operation_type: str, payload: dict) -> NodeOperation:
+                               operation_type: str, payload: dict,
+                               idempotency_key: str | None) -> NodeOperation:
         now = datetime.now(timezone.utc)
         operation = NodeOperation(
             id=str(uuid4()), request_id=item.id, project_id=item.project_id,
             user_id=actor.user_id, node_uuid=node_uuid, operation=operation_type,
             payload=payload, state=OperationState.QUEUED, error=None, created_at=now, updated_at=now,
         )
-        await to_thread(self.store.create_operation, operation)
+        persisted = await to_thread(
+            self.store.create_operation_idempotent, operation, idempotency_key,
+        )
+        if persisted.id != operation.id:
+            return persisted
         await to_thread(
             self.store.record_action, item, actor.user_id, actor.project_id,
             f"operation_queued:{operation_type}:{node_uuid}",
         )
-        return operation
+        return persisted
 
     async def process_operation(self, operation_id: str) -> NodeOperation:
         operation = await to_thread(self.store.start_operation, operation_id)

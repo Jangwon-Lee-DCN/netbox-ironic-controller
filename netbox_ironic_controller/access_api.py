@@ -243,12 +243,15 @@ async def reject_request(request_id: str, payload: DecisionAction, request: Requ
 
 @router.post("/requests/{request_id}/deploy", response_model=OperationView, status_code=202)
 async def deploy_node(request_id: str, payload: DeployAction, request: Request,
+                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                       actor: Actor = Depends(current_actor)) -> OperationView:
     try:
+        if idempotency_key is not None and not (8 <= len(idempotency_key) <= 128):
+            raise ValueError("invalid Idempotency-Key")
         item = await request.app.state.access_coordinator.queue_deploy(
             request_id, actor, payload.node_uuid, payload.image_id,
             {"meta_data": {"instance-id": payload.node_uuid, "local-hostname": payload.hostname},
-             "user_data": payload.user_data}, payload.version,
+             "user_data": payload.user_data}, payload.version, idempotency_key,
         )
     except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -258,10 +261,13 @@ async def deploy_node(request_id: str, payload: DeployAction, request: Request,
 
 @router.post("/requests/{request_id}/power", response_model=OperationView, status_code=202)
 async def power_node(request_id: str, payload: PowerAction, request: Request,
+                     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                      actor: Actor = Depends(current_actor)) -> OperationView:
     try:
+        if idempotency_key is not None and not (8 <= len(idempotency_key) <= 128):
+            raise ValueError("invalid Idempotency-Key")
         item = await request.app.state.access_coordinator.queue_power(
-            request_id, actor, payload.node_uuid, payload.action, payload.version,
+            request_id, actor, payload.node_uuid, payload.action, payload.version, idempotency_key,
         )
     except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
