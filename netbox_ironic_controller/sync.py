@@ -148,6 +148,57 @@ class IronicSyncClient:
             raise RuntimeError("lessee cannot be cleared before successful cleaning")
         await to_thread(self.conn.baremetal.update_node, node, lessee=None)
 
+    async def deploy(self, node_uuid: str, project_id: str, image_id: str,
+                     config_drive: dict, dcn_project_id: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        self._require_leased_node(node, project_id, dcn_project_id)
+        if node.provision_state != "available":
+            raise RuntimeError("only an available leased node can be deployed")
+        image = await to_thread(self.conn.image.get_image, image_id)
+        if not image or not image.checksum or not image.disk_format:
+            raise RuntimeError("approved image metadata is incomplete")
+        instance_info = {
+            "image_source": image.id,
+            "image_checksum": image.checksum,
+            "image_disk_format": image.disk_format,
+        }
+        node = await to_thread(self.conn.baremetal.update_node, node, instance_info=instance_info)
+        await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "active",
+            config_drive=config_drive, wait=True, timeout=3600,
+        )
+
+    async def set_power(self, node_uuid: str, project_id: str, action: str,
+                        dcn_project_id: str) -> None:
+        targets = {
+            "on": "power on", "off": "power off", "reboot": "rebooting",
+            "soft off": "soft power off", "soft reboot": "soft rebooting",
+        }
+        if action not in targets:
+            raise RuntimeError("unsupported power action")
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        self._require_leased_node(node, project_id, dcn_project_id)
+        if node.provision_state != "active":
+            raise RuntimeError("power operations require an active leased node")
+        await to_thread(
+            self.conn.baremetal.set_node_power_state, node, targets[action], wait=True, timeout=300,
+        )
+
+    async def approved_images(self, image_ids: set[str]) -> list[dict]:
+        images = []
+        for image_id in sorted(image_ids):
+            image = await to_thread(self.conn.image.get_image, image_id)
+            if image and image.checksum and image.disk_format:
+                images.append({"id": image.id, "name": image.name or image.id})
+        return images
+
+    @staticmethod
+    def _require_leased_node(node, project_id: str, dcn_project_id: str) -> None:
+        if node.owner != dcn_project_id or node.lessee != project_id:
+            raise RuntimeError("node owner/lessee does not match the approved lease")
+        if node.is_maintenance or node.last_error:
+            raise RuntimeError("leased node is not safe to operate")
+
     async def port_addresses(self, node_uuid: str) -> set[str]:
         ports = await to_thread(lambda: list(self.conn.baremetal.ports(node=node_uuid, details=True)))
         return {str(port.address).lower() for port in ports}

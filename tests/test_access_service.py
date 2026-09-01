@@ -32,6 +32,15 @@ class Runtime:
     async def clear_lessee(self, node_uuid):
         self.calls.append(("clear", node_uuid))
 
+    async def deploy(self, node_uuid, project_id, image_id, config_drive):
+        self.calls.append(("deploy", node_uuid, project_id, image_id, config_drive))
+
+    async def set_power(self, node_uuid, project_id, action):
+        self.calls.append(("power", node_uuid, project_id, action))
+
+    async def approved_images(self):
+        return [{"id": "image-1", "name": "Ubuntu"}]
+
 
 def seed(store, until=None):
     item = AccessRequest("req", "tenant-a", "user", "general", 1, "research",
@@ -75,3 +84,30 @@ async def test_expiry_uses_return_and_cleaning_path(tmp_path):
     await service.approve("req", ADMIN)
     assert await service.expire_leases(ADMIN) == ["req"]
     assert store.get("req").state == RequestState.RETURNED
+
+
+async def test_only_lessee_operator_can_deploy_and_power_assigned_node(tmp_path):
+    store, runtime = AccessStore(tmp_path / "db"), Runtime()
+    seed(store)
+    service = AccessCoordinator(store, Inventory(), runtime, "dcn")
+    leased = await service.approve("req", ADMIN)
+    await service.deploy(
+        "req", REQUESTER, "node-1", "image-1",
+        {"meta_data": {"local-hostname": "node"}}, leased.version,
+    )
+    await service.set_power("req", REQUESTER, "node-1", "reboot", leased.version)
+    assert runtime.calls[-2][0:4] == ("deploy", "node-1", "tenant-a", "image-1")
+    assert runtime.calls[-1] == ("power", "node-1", "tenant-a", "reboot")
+    assert [event["action"] for event in store.audit_events("req")][-2:] == [
+        "deploy:node-1:image-1", "power:node-1:reboot",
+    ]
+
+
+async def test_requester_without_operator_role_cannot_mutate_node(tmp_path):
+    store, runtime = AccessStore(tmp_path / "db"), Runtime()
+    seed(store)
+    service = AccessCoordinator(store, Inventory(), runtime, "dcn")
+    leased = await service.approve("req", ADMIN)
+    viewer = Actor("viewer", "tenant-a", frozenset({"baremetal_requester"}))
+    with pytest.raises(ValueError, match="baremetal_operator"):
+        await service.set_power("req", viewer, "node-1", "reboot", leased.version)

@@ -40,10 +40,12 @@ class NetBoxIronicOfferInventory:
 
 
 class IronicLeaseAdapter:
-    def __init__(self, ironic: IronicSyncClient, netbox: NetBoxSyncClient, dcn_project_id: str):
+    def __init__(self, ironic: IronicSyncClient, netbox: NetBoxSyncClient,
+                 dcn_project_id: str, deploy_image_ids: set[str] | None = None):
         self.ironic = ironic
         self.netbox = netbox
         self.dcn_project_id = dcn_project_id
+        self.deploy_image_ids = deploy_image_ids or set()
 
     async def assign_lessee(self, node_uuid: str, project_id: str) -> None:
         await self.ironic.assign_lessee(node_uuid, project_id, self.dcn_project_id)
@@ -68,3 +70,15 @@ class IronicLeaseAdapter:
         custom = dict(device.get("custom_fields") or {})
         custom["baremetal_lessee_project_id"] = project_id
         await self.netbox.patch("dcim/devices", device["id"], {"custom_fields": custom})
+
+    async def deploy(self, node_uuid: str, project_id: str, image_id: str,
+                     config_drive: dict) -> None:
+        if image_id not in self.deploy_image_ids:
+            raise RuntimeError("image is not approved for bare metal deployment")
+        await self.ironic.deploy(node_uuid, project_id, image_id, config_drive, self.dcn_project_id)
+
+    async def set_power(self, node_uuid: str, project_id: str, action: str) -> None:
+        await self.ironic.set_power(node_uuid, project_id, action, self.dcn_project_id)
+
+    async def approved_images(self) -> list[dict]:
+        return await self.ironic.approved_images(self.deploy_image_ids)

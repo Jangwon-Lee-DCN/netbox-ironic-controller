@@ -44,12 +44,29 @@ class OfferView(BaseModel):
     max_lease_days: int
 
 
+class DeployImageView(BaseModel):
+    id: str
+    name: str
+
+
 class VersionedAction(BaseModel):
     version: int = Field(ge=0)
 
 
 class DecisionAction(VersionedAction):
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class DeployAction(VersionedAction):
+    node_uuid: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    image_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    hostname: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}$")
+    user_data: str = Field(default="", max_length=65536)
+
+
+class PowerAction(VersionedAction):
+    node_uuid: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    action: str = Field(pattern=r"^(on|off|reboot|soft off|soft reboot)$")
 
 
 async def current_actor(request: Request, x_auth_token: str = Header(default="")) -> Actor:
@@ -122,6 +139,14 @@ async def list_offers(request: Request, actor: Actor = Depends(current_actor)) -
     ]
 
 
+@router.get("/deploy-images", response_model=list[DeployImageView])
+async def list_deploy_images(request: Request,
+                             actor: Actor = Depends(current_actor)) -> list[DeployImageView]:
+    require_requester(actor)
+    rows = await request.app.state.access_coordinator.runtime.approved_images()
+    return [DeployImageView(**row) for row in rows]
+
+
 @router.get("/admin/requests", response_model=list[RequestView])
 async def list_admin_requests(request: Request,
                               actor: Actor = Depends(current_actor)) -> list[RequestView]:
@@ -184,6 +209,34 @@ async def reject_request(request_id: str, payload: DecisionAction, request: Requ
     return view(item, actor, settings.access_dcn_project_id)
 
 
+@router.post("/requests/{request_id}/deploy", response_model=RequestView)
+async def deploy_node(request_id: str, payload: DeployAction, request: Request,
+                      actor: Actor = Depends(current_actor)) -> RequestView:
+    settings = request.app.state.settings
+    try:
+        item = await request.app.state.access_coordinator.deploy(
+            request_id, actor, payload.node_uuid, payload.image_id,
+            {"meta_data": {"instance-id": payload.node_uuid, "local-hostname": payload.hostname},
+             "user_data": payload.user_data}, payload.version,
+        )
+    except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return view(item, actor, settings.access_dcn_project_id)
+
+
+@router.post("/requests/{request_id}/power", response_model=RequestView)
+async def power_node(request_id: str, payload: PowerAction, request: Request,
+                     actor: Actor = Depends(current_actor)) -> RequestView:
+    settings = request.app.state.settings
+    try:
+        item = await request.app.state.access_coordinator.set_power(
+            request_id, actor, payload.node_uuid, payload.action, payload.version,
+        )
+    except (DomainError, ValueError, RuntimeError, VersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return view(item, actor, settings.access_dcn_project_id)
+
+
 def configure_access(app, settings, netbox, ironic) -> None:
     from .access_inventory import IronicLeaseAdapter, NetBoxIronicOfferInventory
     from .access_service import AccessCoordinator
@@ -193,6 +246,9 @@ def configure_access(app, settings, netbox, ironic) -> None:
     app.state.access_coordinator = AccessCoordinator(
         app.state.access_store,
         NetBoxIronicOfferInventory(netbox, ironic),
-        IronicLeaseAdapter(ironic, netbox, settings.access_dcn_project_id),
+        IronicLeaseAdapter(
+            ironic, netbox, settings.access_dcn_project_id,
+            {value.strip() for value in settings.access_deploy_image_ids.split(",") if value.strip()},
+        ),
         settings.access_dcn_project_id,
     )

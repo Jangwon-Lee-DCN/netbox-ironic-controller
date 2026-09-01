@@ -16,6 +16,10 @@ class IronicLeaseRuntime(Protocol):
     async def assign_lessee(self, node_uuid: str, project_id: str) -> None: ...
     async def return_and_clean(self, node_uuid: str) -> None: ...
     async def clear_lessee(self, node_uuid: str) -> None: ...
+    async def deploy(self, node_uuid: str, project_id: str, image_id: str,
+                     config_drive: dict) -> None: ...
+    async def set_power(self, node_uuid: str, project_id: str, action: str) -> None: ...
+    async def approved_images(self) -> list[dict]: ...
 
 
 class AccessCoordinator:
@@ -122,3 +126,38 @@ class AccessCoordinator:
             await self.return_lease(request_id, actor)
             completed.append(request_id)
         return completed
+
+    async def deploy(self, request_id: str, actor: Actor, node_uuid: str,
+                     image_id: str, config_drive: dict, expected_version: int) -> AccessRequest:
+        item = await to_thread(self.store.get, request_id)
+        self._require_lessee(item, actor, node_uuid, expected_version)
+        await self.runtime.deploy(node_uuid, item.project_id, image_id, config_drive)
+        await to_thread(
+            self.store.record_action, item, actor.user_id, actor.project_id,
+            f"deploy:{node_uuid}:{image_id}",
+        )
+        return item
+
+    async def set_power(self, request_id: str, actor: Actor, node_uuid: str,
+                        action: str, expected_version: int) -> AccessRequest:
+        item = await to_thread(self.store.get, request_id)
+        self._require_lessee(item, actor, node_uuid, expected_version)
+        await self.runtime.set_power(node_uuid, item.project_id, action)
+        await to_thread(
+            self.store.record_action, item, actor.user_id, actor.project_id,
+            f"power:{node_uuid}:{action}",
+        )
+        return item
+
+    @staticmethod
+    def _require_lessee(item: AccessRequest, actor: Actor, node_uuid: str,
+                        expected_version: int) -> None:
+        if item.version != expected_version:
+            from .access_store import VersionConflict
+            raise VersionConflict(f"expected version {expected_version}, got {item.version}")
+        if actor.project_id != item.project_id:
+            raise ValueError("lessee project is required")
+        if not actor.roles.intersection({"baremetal_operator", "baremetal_admin"}):
+            raise ValueError("baremetal_operator role is required")
+        if item.state != RequestState.LEASED or node_uuid not in item.node_uuids:
+            raise ValueError("node is not leased by this request")

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     access_database_path: str = "/var/lib/baremetal-access/access.db"
     access_dcn_project_id: str = ""
     access_max_lease_days: int = 30
+    access_deploy_image_ids: str = ""
 
 
 @lru_cache

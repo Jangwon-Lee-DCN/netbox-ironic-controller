@@ -8,12 +8,15 @@ from netbox_ironic_controller.access_service import AccessCoordinator
 from netbox_ironic_controller.access_domain import OfferCandidate
 from netbox_ironic_controller.config import Settings
 
+NODE_ID = "22222222-2222-2222-2222-222222222222"
+IMAGE_ID = "11111111-1111-1111-1111-111111111111"
 
 class Auth:
     async def validate(self, token):
         actors = {
             "tenant-a": Actor("user-a", "project-a", frozenset({"baremetal_requester"})),
             "tenant-b": Actor("user-b", "project-b", frozenset({"baremetal_requester"})),
+            "tenant-op": Actor("operator-a", "project-a", frozenset({"baremetal_operator"})),
             "admin": Actor("admin", "dcn", frozenset({"baremetal_admin"})),
             "member": Actor("member", "project-a", frozenset({"member"})),
         }
@@ -22,13 +25,19 @@ class Auth:
 
 class Inventory:
     async def candidates(self, profile, rack):
-        return [OfferCandidate("node-1", "Rack 1", profile or "general-1u", True, True, "available", False, None, None)]
+        return [OfferCandidate(NODE_ID, "Rack 1", profile or "general-1u", True, True, "available", False, None, None)]
 
 
 class Runtime:
+    def __init__(self): self.operations = []
     async def assign_lessee(self, node_uuid, project_id): pass
     async def return_and_clean(self, node_uuid): pass
     async def clear_lessee(self, node_uuid): pass
+    async def approved_images(self): return [{"id": IMAGE_ID, "name": "Ubuntu"}]
+    async def deploy(self, node_uuid, project_id, image_id, config_drive):
+        self.operations.append(("deploy", node_uuid, project_id, image_id))
+    async def set_power(self, node_uuid, project_id, action):
+        self.operations.append(("power", node_uuid, project_id, action))
 
 
 def app(tmp_path):
@@ -72,7 +81,16 @@ async def test_offer_list_is_sanitized_and_contains_no_node_identity(tmp_path):
     assert response.json() == [{
         "profile": "general-1u", "rack": "Rack 1", "available": 1, "max_lease_days": 30,
     }]
-    assert "node-1" not in response.text
+    assert NODE_ID not in response.text
+
+
+async def test_deploy_image_catalog_contains_only_approved_identity(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        response = await api.get("/v1/deploy-images", headers={"X-Auth-Token": "tenant-a"})
+    assert response.status_code == 200
+    assert response.json() == [{
+        "id": IMAGE_ID, "name": "Ubuntu",
+    }]
 
 
 async def test_plain_member_and_excessive_lease_are_rejected(tmp_path):
@@ -91,10 +109,10 @@ async def test_approved_node_is_visible_only_to_admin_and_lessee_project(tmp_pat
             f"/v1/admin/requests/{created['id']}/approve",
             headers={"X-Auth-Token": "admin"}, json={"version": created["version"]},
         )).json()
-        assert approved["nodes"] == ["node-1"]
+        assert approved["nodes"] == [NODE_ID]
         own = (await api.get("/v1/requests", headers={"X-Auth-Token": "tenant-a"})).json()
         other = (await api.get("/v1/requests", headers={"X-Auth-Token": "tenant-b"})).json()
-    assert own[0]["nodes"] == ["node-1"]
+    assert own[0]["nodes"] == [NODE_ID]
     assert other == []
 
 
@@ -115,3 +133,29 @@ async def test_admin_reject_and_requester_cancel_are_versioned(tmp_path):
         )
     assert cancelled.status_code == 200
     assert cancelled.json()["state"] == "cancelled"
+
+
+async def test_only_lessee_operator_can_call_deploy_and_power_endpoints(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        created = (await submit(api)).json()
+        leased = (await api.post(
+            f"/v1/admin/requests/{created['id']}/approve", headers={"X-Auth-Token": "admin"},
+            json={"version": created["version"]},
+        )).json()
+        payload = {
+            "version": leased["version"], "node_uuid": NODE_ID, "image_id": IMAGE_ID,
+            "hostname": "research-01", "user_data": "#cloud-config\n",
+        }
+        assert (await api.post(
+            f"/v1/requests/{created['id']}/deploy",
+            headers={"X-Auth-Token": "tenant-a"}, json=payload,
+        )).status_code == 409
+        assert (await api.post(
+            f"/v1/requests/{created['id']}/deploy",
+            headers={"X-Auth-Token": "tenant-op"}, json=payload,
+        )).status_code == 200
+        assert (await api.post(
+            f"/v1/requests/{created['id']}/power",
+            headers={"X-Auth-Token": "tenant-op"},
+            json={"version": leased["version"], "node_uuid": NODE_ID, "action": "reboot"},
+        )).status_code == 200

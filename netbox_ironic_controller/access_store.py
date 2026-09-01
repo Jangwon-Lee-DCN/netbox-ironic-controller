@@ -176,6 +176,19 @@ class AccessStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_action(self, request: AccessRequest, actor_user_id: str,
+                      actor_project_id: str, action: str) -> None:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM access_requests WHERE id=?", (request.id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(request.id)
+            current = self._from_row(row)
+            if current.version != request.version:
+                raise VersionConflict("request was changed concurrently")
+            self._audit(connection, current, current, actor_user_id, actor_project_id, action)
+
     @contextmanager
     def _transaction(self):
         connection = self._connect()
