@@ -10,20 +10,33 @@ from .access_domain import Actor
 from .sync import IronicSyncClient, KubernetesSecretStore, NetBoxIronicController, NetBoxSyncClient
 
 
-async def reconcile_loop(app: FastAPI) -> None:
-    while True:
+async def reconcile_once(app: FastAPI) -> None:
+    if app.state.settings.sync_enabled:
         try:
-            if app.state.settings.sync_enabled:
-                result = await app.state.controller.reconcile()
-                app.state.last_result = result.__dict__
-                app.state.last_success = datetime.now(timezone.utc).isoformat()
-                app.state.last_error = None
-            if app.state.settings.access_enabled:
-                service_actor = Actor("baremetal-access-service", app.state.settings.access_dcn_project_id,
-                                      frozenset({"baremetal_admin"}))
-                app.state.expired_requests = await app.state.access_coordinator.expire_leases(service_actor)
+            result = await app.state.controller.reconcile()
+            app.state.last_result = result.__dict__
+            app.state.last_success = datetime.now(timezone.utc).isoformat()
+            app.state.last_error = None
         except Exception as exc:
             app.state.last_error = str(exc)
+    if app.state.settings.access_enabled:
+        try:
+            service_actor = Actor(
+                "baremetal-access-service", app.state.settings.access_dcn_project_id,
+                frozenset({"baremetal_admin"}),
+            )
+            app.state.expired_requests = await app.state.access_coordinator.expire_leases(
+                service_actor,
+            )
+            app.state.last_expiry_success = datetime.now(timezone.utc).isoformat()
+            app.state.last_expiry_error = None
+        except Exception as exc:
+            app.state.last_expiry_error = str(exc)
+
+
+async def reconcile_loop(app: FastAPI) -> None:
+    while True:
+        await reconcile_once(app)
         await asyncio.sleep(app.state.settings.sync_interval_seconds)
 
 
@@ -37,6 +50,8 @@ async def lifespan(app: FastAPI):
         settings, netbox, ironic, KubernetesSecretStore(settings.sync_bmc_secret_namespace),
     )
     app.state.last_result, app.state.last_success, app.state.last_error = None, None, None
+    app.state.expired_requests = []
+    app.state.last_expiry_success, app.state.last_expiry_error = None, None
     if settings.access_enabled:
         if not settings.access_dcn_project_id:
             raise RuntimeError("RACKD_ACCESS_DCN_PROJECT_ID is required when access is enabled")
@@ -54,7 +69,14 @@ app.include_router(access_router)
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "last_success": app.state.last_success, "last_error": app.state.last_error}
+    expiry_error = getattr(app.state, "last_expiry_error", None)
+    return {
+        "status": "degraded" if app.state.last_error or expiry_error else "ok",
+        "last_success": app.state.last_success,
+        "last_error": app.state.last_error,
+        "last_expiry_success": getattr(app.state, "last_expiry_success", None),
+        "last_expiry_error": expiry_error,
+    }
 
 
 @app.post("/reconcile")
@@ -75,4 +97,7 @@ async def reconcile():
 @app.get("/status")
 async def status():
     return {"last_success": app.state.last_success, "last_error": app.state.last_error,
-            "last_result": app.state.last_result}
+            "last_result": app.state.last_result,
+            "expired_requests": app.state.expired_requests,
+            "last_expiry_success": app.state.last_expiry_success,
+            "last_expiry_error": app.state.last_expiry_error}
