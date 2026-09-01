@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     access_dcn_project_id: str = ""
     access_max_lease_days: int = 30
     access_deploy_image_ids: str = ""
+    access_clean_steps_json: str = "[]"
 
 
 @lru_cache

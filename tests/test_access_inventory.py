@@ -1,3 +1,5 @@
+import pytest
+
 from netbox_ironic_controller.access_inventory import IronicLeaseAdapter, NetBoxIronicOfferInventory
 
 
@@ -60,3 +62,8 @@ async def test_lease_adapter_mirrors_runtime_lessee_without_dropping_fields():
         "ironic_node_uuid": "node-1", "keep": "value", "baremetal_lessee_project_id": "tenant-a",
     }
     assert netbox.patches[1][2]["custom_fields"]["baremetal_lessee_project_id"] == ""
+
+
+def test_lease_adapter_rejects_malformed_manual_clean_steps():
+    with pytest.raises(ValueError, match="interface is invalid"):
+        IronicLeaseAdapter(LeaseIronic(), LeaseNetBox(), "dcn", clean_steps=[{"step": "erase"}])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from .access_domain import OfferCandidate
 from .sync import IronicSyncClient, NetBoxSyncClient
 
@@ -41,18 +43,39 @@ class NetBoxIronicOfferInventory:
 
 class IronicLeaseAdapter:
     def __init__(self, ironic: IronicSyncClient, netbox: NetBoxSyncClient,
-                 dcn_project_id: str, deploy_image_ids: set[str] | None = None):
+                 dcn_project_id: str, deploy_image_ids: set[str] | None = None,
+                 clean_steps: list[dict] | None = None):
         self.ironic = ironic
         self.netbox = netbox
         self.dcn_project_id = dcn_project_id
         self.deploy_image_ids = deploy_image_ids or set()
+        self.clean_steps = self._validated_clean_steps(clean_steps or [])
+
+    @staticmethod
+    def _validated_clean_steps(steps: list[dict]) -> list[dict]:
+        if not isinstance(steps, list):
+            raise ValueError("manual cleaning steps must be a JSON list")
+        for value in steps:
+            if not isinstance(value, dict):
+                raise ValueError("each manual cleaning step must be an object")
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(value.get("interface", ""))):
+                raise ValueError("manual cleaning interface is invalid")
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(value.get("step", ""))):
+                raise ValueError("manual cleaning step name is invalid")
+            if not isinstance(value.get("args", {}), dict):
+                raise ValueError("manual cleaning step args must be an object")
+            if "priority" in value and not isinstance(value["priority"], int):
+                raise ValueError("manual cleaning priority must be an integer")
+        return steps
 
     async def assign_lessee(self, node_uuid: str, project_id: str) -> None:
         await self.ironic.assign_lessee(node_uuid, project_id, self.dcn_project_id)
         await self._mirror_lessee(node_uuid, project_id)
 
     async def return_and_clean(self, node_uuid: str) -> None:
-        await self.ironic.return_and_clean(node_uuid)
+        if not self.clean_steps:
+            raise RuntimeError("manual cleaning steps are not configured")
+        await self.ironic.return_and_clean(node_uuid, self.clean_steps)
 
     async def clear_lessee(self, node_uuid: str) -> None:
         await self.ironic.clear_lessee(node_uuid)

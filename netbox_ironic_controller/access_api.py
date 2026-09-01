@@ -292,6 +292,7 @@ async def list_node_operations(request_id: str, request: Request,
 
 
 def configure_access(app, settings, netbox, ironic) -> None:
+    import json
     from .access_inventory import IronicLeaseAdapter, NetBoxIronicOfferInventory
     from .access_service import AccessCoordinator
 
@@ -304,6 +305,7 @@ def configure_access(app, settings, netbox, ironic) -> None:
         IronicLeaseAdapter(
             ironic, netbox, settings.access_dcn_project_id,
             {value.strip() for value in settings.access_deploy_image_ids.split(",") if value.strip()},
+            json.loads(settings.access_clean_steps_json),
         ),
         settings.access_dcn_project_id,
     )

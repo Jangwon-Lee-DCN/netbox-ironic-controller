@@ -133,14 +133,32 @@ class IronicSyncClient:
             raise RuntimeError("node is not safe to lease")
         await to_thread(self.conn.baremetal.update_node, node, lessee=project_id)
 
-    async def return_and_clean(self, node_uuid: str) -> None:
+    async def return_and_clean(self, node_uuid: str, clean_steps: list[dict]) -> None:
+        if not clean_steps:
+            raise RuntimeError("manual cleaning steps are required")
         node = await to_thread(self.conn.baremetal.get_node, node_uuid)
         if node.provision_state == "active":
             node = await to_thread(
                 self.conn.baremetal.set_node_provision_state, node, "deleted", wait=True, timeout=3600,
             )
         if node.provision_state != "available" or node.last_error:
-            raise RuntimeError(f"node did not complete return/cleaning: {node.provision_state}")
+            raise RuntimeError(f"node did not complete undeploy: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "manage", wait=True, timeout=900,
+        )
+        if node.provision_state != "manageable" or node.last_error:
+            raise RuntimeError(f"node did not become manageable for cleaning: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "clean",
+            clean_steps=clean_steps, wait=True, timeout=3600,
+        )
+        if node.provision_state != "manageable" or node.last_error:
+            raise RuntimeError(f"node did not complete manual cleaning: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "provide", wait=True, timeout=900,
+        )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"node did not return to available after cleaning: {node.provision_state}")
 
     async def clear_lessee(self, node_uuid: str) -> None:
         node = await to_thread(self.conn.baremetal.get_node, node_uuid)

@@ -30,6 +30,9 @@ class Baremetal:
 
     def set_node_provision_state(self, node, target, **kwargs):
         self.calls.append(("provision", target, kwargs))
+        states = {"deleted": "available", "manage": "manageable",
+                  "clean": "manageable", "provide": "available", "active": "active"}
+        node.provision_state = states[target]
         return node
 
     def set_node_power_state(self, node, target, **kwargs):
@@ -68,3 +71,21 @@ async def test_power_action_maps_to_ironic_target_and_checks_lease():
     runtime.conn.baremetal.node.lessee = "other"
     with pytest.raises(RuntimeError, match="owner/lessee"):
         await runtime.set_power(NODE, PROJECT, "on", OWNER)
+
+
+async def test_return_performs_explicit_manual_clean_before_available():
+    runtime = client("active")
+    steps = [{"interface": "deploy", "step": "erase_devices_metadata", "args": {}, "priority": 10}]
+    await runtime.return_and_clean(NODE, steps)
+    calls = runtime.conn.baremetal.calls
+    assert [call[1] for call in calls] == ["deleted", "manage", "clean", "provide"]
+    assert calls[2][2]["clean_steps"] == steps
+    assert calls[2][2]["wait"] is True
+    assert runtime.conn.baremetal.node.provision_state == "available"
+
+
+async def test_return_refuses_to_claim_cleaning_without_steps():
+    runtime = client("active")
+    with pytest.raises(RuntimeError, match="manual cleaning steps are required"):
+        await runtime.return_and_clean(NODE, [])
+    assert runtime.conn.baremetal.calls == []
