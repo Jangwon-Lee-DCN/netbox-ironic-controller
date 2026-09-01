@@ -9,7 +9,7 @@ class NetBoxIronicOfferInventory:
         self.netbox = netbox
         self.ironic = ironic
 
-    async def candidates(self, profile: str, rack: str | None = None) -> list[OfferCandidate]:
+    async def candidates(self, profile: str | None, rack: str | None = None) -> list[OfferCandidate]:
         devices = await self.netbox.all("dcim/devices/", {"role": "server", "limit": 500})
         nodes = await self.ironic.nodes()
         candidates = []
@@ -17,7 +17,7 @@ class NetBoxIronicOfferInventory:
             custom = device.get("custom_fields") or {}
             node_uuid = custom.get("ironic_node_uuid")
             node = nodes.get(node_uuid)
-            if not node or custom.get("baremetal_profile") != profile:
+            if not node or (profile is not None and custom.get("baremetal_profile") != profile):
                 continue
             rack_name = ((device.get("rack") or {}).get("name") or "")
             if rack and rack_name != rack:

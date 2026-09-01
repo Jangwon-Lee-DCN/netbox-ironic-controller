@@ -22,7 +22,7 @@ class Auth:
 
 class Inventory:
     async def candidates(self, profile, rack):
-        return [OfferCandidate("node-1", "Rack 1", profile, True, True, "available", False, None, None)]
+        return [OfferCandidate("node-1", "Rack 1", profile or "general-1u", True, True, "available", False, None, None)]
 
 
 class Runtime:
@@ -63,6 +63,16 @@ async def test_only_dcn_admin_can_list_all_requests(tmp_path):
         assert (await api.get("/v1/admin/requests", headers={"X-Auth-Token": "tenant-a"})).status_code == 403
         rows = (await api.get("/v1/admin/requests", headers={"X-Auth-Token": "admin"})).json()
     assert len(rows) == 1
+
+
+async def test_offer_list_is_sanitized_and_contains_no_node_identity(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        response = await api.get("/v1/offers", headers={"X-Auth-Token": "tenant-a"})
+    assert response.status_code == 200
+    assert response.json() == [{
+        "profile": "general-1u", "rack": "Rack 1", "available": 1, "max_lease_days": 30,
+    }]
+    assert "node-1" not in response.text
 
 
 async def test_plain_member_and_excessive_lease_are_rejected(tmp_path):

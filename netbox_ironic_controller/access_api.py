@@ -37,6 +37,13 @@ class RequestView(BaseModel):
     version: int
 
 
+class OfferView(BaseModel):
+    profile: str
+    rack: str
+    available: int
+    max_lease_days: int
+
+
 class VersionedAction(BaseModel):
     version: int = Field(ge=0)
 
@@ -93,6 +100,23 @@ async def list_requests(request: Request, actor: Actor = Depends(current_actor))
     settings = request.app.state.settings
     items = await to_thread(request.app.state.access_store.list_for_project, actor.project_id)
     return [view(item, actor, settings.access_dcn_project_id) for item in items]
+
+
+@router.get("/offers", response_model=list[OfferView])
+async def list_offers(request: Request, actor: Actor = Depends(current_actor)) -> list[OfferView]:
+    require_requester(actor)
+    candidates = await request.app.state.access_coordinator.inventory.candidates(None, None)
+    grouped: dict[tuple[str, str], list] = {}
+    for candidate in candidates:
+        if candidate.eligible:
+            grouped.setdefault((candidate.profile, candidate.rack), []).append(candidate)
+    return [
+        OfferView(
+            profile=profile, rack=rack, available=len(rows),
+            max_lease_days=min(row.max_lease_days for row in rows),
+        )
+        for (profile, rack), rows in sorted(grouped.items())
+    ]
 
 
 @router.get("/admin/requests", response_model=list[RequestView])
