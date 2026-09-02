@@ -5,6 +5,7 @@ import json
 from asyncio import to_thread
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol
 
 import httpx
@@ -74,12 +75,15 @@ class IronicSyncClient:
     def __init__(self, settings: Settings):
         from openstack import connection
 
+        scope = ({"project_id": settings.openstack_project_id}
+                 if settings.openstack_project_id
+                 else {"system_scope": settings.openstack_system_scope})
         self.conn = connection.Connection(
             auth_url=settings.openstack_auth_url,
             username=settings.openstack_username,
             password=settings.openstack_password,
             user_domain_name=settings.openstack_user_domain_name,
-            system_scope=settings.openstack_system_scope,
+            **scope,
             region_name=settings.openstack_region,
             interface=settings.openstack_interface,
             identity_api_version="3",
@@ -97,6 +101,10 @@ class IronicSyncClient:
                 "maintenance": bool(node.is_maintenance),
                 "instance_uuid": node.instance_id,
                 "last_error": node.last_error,
+                "owner": node.owner,
+                "lessee": node.lessee,
+                "resource_class": node.resource_class,
+                "traits": list(node.traits or []),
             }
             for node in nodes
         }
@@ -118,6 +126,124 @@ class IronicSyncClient:
             properties=properties,
         )
         return node.id
+
+    async def assign_lessee(self, node_uuid: str, project_id: str, dcn_project_id: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.owner != dcn_project_id:
+            raise RuntimeError("DCN does not own the requested node")
+        if node.lessee and node.lessee != project_id:
+            raise RuntimeError("node already has another lessee")
+        if node.provision_state != "available" or node.is_maintenance or node.last_error:
+            raise RuntimeError("node is not safe to lease")
+        await to_thread(self.conn.baremetal.update_node, node, lessee=project_id)
+
+    async def prepare_access_fixture(self, node_uuid: str, dcn_project_id: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.is_maintenance:
+            raise RuntimeError("fixture node is not safe to prepare")
+        if node.provision_state in {"active", "deploy failed"}:
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "deleted",
+                wait=True, timeout=3600,
+            )
+        if node.provision_state == "manageable" and not node.last_error:
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "provide",
+                wait=True, timeout=900,
+            )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"fixture node did not become available: {node.provision_state}")
+        await to_thread(
+            self.conn.baremetal.update_node, node, owner=dcn_project_id, lessee=None,
+        )
+
+    async def return_and_clean(self, node_uuid: str, clean_steps: list[dict]) -> None:
+        if not clean_steps:
+            raise RuntimeError("manual cleaning steps are required")
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.provision_state == "active":
+            node = await to_thread(
+                self.conn.baremetal.set_node_provision_state, node, "deleted", wait=True, timeout=3600,
+            )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"node did not complete undeploy: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "manage", wait=True, timeout=900,
+        )
+        if node.provision_state != "manageable" or node.last_error:
+            raise RuntimeError(f"node did not become manageable for cleaning: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "clean",
+            clean_steps=clean_steps, wait=True, timeout=3600,
+        )
+        if node.provision_state != "manageable" or node.last_error:
+            raise RuntimeError(f"node did not complete manual cleaning: {node.provision_state}")
+        node = await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "provide", wait=True, timeout=900,
+        )
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError(f"node did not return to available after cleaning: {node.provision_state}")
+
+    async def clear_lessee(self, node_uuid: str) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        if node.provision_state != "available" or node.last_error:
+            raise RuntimeError("lessee cannot be cleared before successful cleaning")
+        await to_thread(self.conn.baremetal.update_node, node, lessee=None)
+
+    async def deploy(self, node_uuid: str, project_id: str, image_id: str,
+                     config_drive: dict, dcn_project_id: str,
+                     image_metadata: dict | None = None) -> None:
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        self._require_leased_node(node, project_id, dcn_project_id)
+        if node.provision_state != "available":
+            raise RuntimeError("only an available leased node can be deployed")
+        if image_metadata:
+            image = SimpleNamespace(**image_metadata)
+        else:
+            image = await to_thread(self.conn.image.get_image, image_id)
+            if not image or not image.checksum or not image.disk_format:
+                raise RuntimeError("approved image metadata is incomplete")
+        instance_info = {
+            "image_source": image.id,
+            "image_checksum": image.checksum,
+            "image_disk_format": image.disk_format,
+        }
+        node = await to_thread(self.conn.baremetal.update_node, node, instance_info=instance_info)
+        await to_thread(
+            self.conn.baremetal.set_node_provision_state, node, "active",
+            config_drive=config_drive, wait=True, timeout=3600,
+        )
+
+    async def set_power(self, node_uuid: str, project_id: str, action: str,
+                        dcn_project_id: str) -> None:
+        targets = {
+            "on": "power on", "off": "power off", "reboot": "rebooting",
+            "soft off": "soft power off", "soft reboot": "soft rebooting",
+        }
+        if action not in targets:
+            raise RuntimeError("unsupported power action")
+        node = await to_thread(self.conn.baremetal.get_node, node_uuid)
+        self._require_leased_node(node, project_id, dcn_project_id)
+        if node.provision_state != "active":
+            raise RuntimeError("power operations require an active leased node")
+        await to_thread(
+            self.conn.baremetal.set_node_power_state, node, targets[action], wait=True, timeout=300,
+        )
+
+    async def approved_images(self, image_ids: set[str]) -> list[dict]:
+        images = []
+        for image_id in sorted(image_ids):
+            image = await to_thread(self.conn.image.get_image, image_id)
+            if image and image.checksum and image.disk_format:
+                images.append({"id": image.id, "name": image.name or image.id})
+        return images
+
+    @staticmethod
+    def _require_leased_node(node, project_id: str, dcn_project_id: str) -> None:
+        if node.owner != dcn_project_id or node.lessee != project_id:
+            raise RuntimeError("node owner/lessee does not match the approved lease")
+        if node.is_maintenance or node.last_error:
+            raise RuntimeError("leased node is not safe to operate")
 
     async def port_addresses(self, node_uuid: str) -> set[str]:
         ports = await to_thread(lambda: list(self.conn.baremetal.ports(node=node_uuid, details=True)))
@@ -163,6 +289,7 @@ class NetBoxIronicController:
                         "ironic_provision_state": node.get("provision_state") or "",
                         "ironic_maintenance": bool(node.get("maintenance")),
                         "ironic_last_error": node.get("last_error") or "",
+                        "baremetal_lessee_project_id": node.get("lessee") or "",
                     })
                     if updated != custom:
                         await self.netbox.patch("dcim/devices", device["id"], {"custom_fields": updated})

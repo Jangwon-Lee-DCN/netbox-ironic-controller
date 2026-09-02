@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import re
+from urllib.parse import urlparse
+
+from .access_domain import OfferCandidate
+from .sync import IronicSyncClient, NetBoxSyncClient
+
+
+class NetBoxIronicOfferInventory:
+    def __init__(self, netbox: NetBoxSyncClient, ironic: IronicSyncClient):
+        self.netbox = netbox
+        self.ironic = ironic
+
+    async def candidates(self, profile: str | None, rack: str | None = None) -> list[OfferCandidate]:
+        devices = await self.netbox.all("dcim/devices/", {"role": "server", "limit": 500})
+        nodes = await self.ironic.nodes()
+        candidates = []
+        for device in devices:
+            custom = device.get("custom_fields") or {}
+            node_uuid = custom.get("ironic_node_uuid")
+            node = nodes.get(node_uuid)
+            if not node or (profile is not None and custom.get("baremetal_profile") != profile):
+                continue
+            rack_name = ((device.get("rack") or {}).get("name") or "")
+            if rack and rack_name != rack:
+                continue
+            status = device.get("status") or {}
+            status_value = status.get("value") if isinstance(status, dict) else status
+            candidates.append(OfferCandidate(
+                node_uuid=node_uuid,
+                rack=rack_name,
+                profile=custom.get("baremetal_profile") or "",
+                netbox_active=status_value == "active",
+                offer_enabled=custom.get("baremetal_offer_enabled") is True,
+                provision_state=node.get("provision_state") or "",
+                maintenance=bool(node.get("maintenance")),
+                lessee=node.get("lessee"),
+                last_error=node.get("last_error"),
+                max_lease_days=int(custom.get("baremetal_max_lease_days") or 30),
+            ))
+        return sorted(candidates, key=lambda item: (item.rack, item.node_uuid))
+
+
+class IronicLeaseAdapter:
+    def __init__(self, ironic: IronicSyncClient, netbox: NetBoxSyncClient,
+                 dcn_project_id: str, deploy_image_ids: set[str] | None = None,
+                 clean_steps: list[dict] | None = None,
+                 deploy_images: list[dict] | None = None):
+        self.ironic = ironic
+        self.netbox = netbox
+        self.dcn_project_id = dcn_project_id
+        self.deploy_image_ids = deploy_image_ids or set()
+        self.deploy_images = self._validated_deploy_images(deploy_images or [])
+        self.deploy_image_ids.update(self.deploy_images)
+        self.clean_steps = self._validated_clean_steps(clean_steps or [])
+
+    @staticmethod
+    def _validated_deploy_images(images: list[dict]) -> dict[str, dict]:
+        if not isinstance(images, list):
+            raise ValueError("approved deploy images must be a JSON list")
+        result = {}
+        for image in images:
+            if not isinstance(image, dict):
+                raise ValueError("each approved deploy image must be an object")
+            required = ("id", "name", "checksum", "disk_format", "source_url", "source_checksum")
+            if any(not isinstance(image.get(key), str) or not image[key] for key in required):
+                raise ValueError("approved deploy image metadata is incomplete")
+            if urlparse(image["source_url"]).scheme != "https":
+                raise ValueError("approved deploy image source must use HTTPS")
+            if not re.fullmatch(r"[0-9a-f]{64}", image["source_checksum"]):
+                raise ValueError("approved deploy image source checksum must be SHA-256")
+            if image["id"] in result:
+                raise ValueError("approved deploy image IDs must be unique")
+            result[image["id"]] = {key: image[key] for key in required}
+        return result
+
+    @staticmethod
+    def _validated_clean_steps(steps: list[dict]) -> list[dict]:
+        if not isinstance(steps, list):
+            raise ValueError("manual cleaning steps must be a JSON list")
+        for value in steps:
+            if not isinstance(value, dict):
+                raise ValueError("each manual cleaning step must be an object")
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(value.get("interface", ""))):
+                raise ValueError("manual cleaning interface is invalid")
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(value.get("step", ""))):
+                raise ValueError("manual cleaning step name is invalid")
+            if not isinstance(value.get("args", {}), dict):
+                raise ValueError("manual cleaning step args must be an object")
+            if "priority" in value and not isinstance(value["priority"], int):
+                raise ValueError("manual cleaning priority must be an integer")
+        return steps
+
+    async def assign_lessee(self, node_uuid: str, project_id: str) -> None:
+        await self.ironic.assign_lessee(node_uuid, project_id, self.dcn_project_id)
+        await self._mirror_lessee(node_uuid, project_id)
+
+    async def return_and_clean(self, node_uuid: str) -> None:
+        if not self.clean_steps:
+            raise RuntimeError("manual cleaning steps are not configured")
+        await self.ironic.return_and_clean(node_uuid, self.clean_steps)
+
+    async def clear_lessee(self, node_uuid: str) -> None:
+        await self.ironic.clear_lessee(node_uuid)
+        await self._mirror_lessee(node_uuid, "")
+
+    async def _mirror_lessee(self, node_uuid: str, project_id: str) -> None:
+        devices = await self.netbox.all("dcim/devices/", {"role": "server", "limit": 500})
+        matches = [
+            device for device in devices
+            if (device.get("custom_fields") or {}).get("ironic_node_uuid") == node_uuid
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"expected one NetBox device for Ironic node {node_uuid}, got {len(matches)}")
+        device = matches[0]
+        custom = dict(device.get("custom_fields") or {})
+        custom["baremetal_lessee_project_id"] = project_id
+        await self.netbox.patch("dcim/devices", device["id"], {"custom_fields": custom})
+
+    async def deploy(self, node_uuid: str, project_id: str, image_id: str,
+                     config_drive: dict) -> None:
+        if image_id not in self.deploy_image_ids:
+            raise RuntimeError("image is not approved for bare metal deployment")
+        await self.ironic.deploy(
+            node_uuid, project_id, image_id, config_drive, self.dcn_project_id,
+            self.deploy_images.get(image_id),
+        )
+
+    async def set_power(self, node_uuid: str, project_id: str, action: str) -> None:
+        await self.ironic.set_power(node_uuid, project_id, action, self.dcn_project_id)
+
+    async def approved_images(self) -> list[dict]:
+        if self.deploy_images:
+            return [
+                {"id": image["id"], "name": image["name"]}
+                for image in sorted(self.deploy_images.values(), key=lambda row: row["id"])
+            ]
+        return await self.ironic.approved_images(self.deploy_image_ids)
