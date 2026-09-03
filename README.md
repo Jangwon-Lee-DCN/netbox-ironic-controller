@@ -10,8 +10,13 @@ Kubernetes 서비스입니다. 사용자 화면은 별도 Horizon plugin이 소�
 - 물리 자산의 Ironic `owner`는 DCN 프로젝트에 유지합니다.
 - 승인된 프로젝트는 기간 제한 `lessee`가 됩니다.
 - 전체 Ironic 작업과 신청 승인은 `dcn` 프로젝트의 `baremetal_admin`만 수행합니다.
-- 일반 프로젝트는 `baremetal_requester` 또는 `baremetal_operator` 역할로 자신의
-  신청과 임대 노드만 볼 수 있습니다.
+- DCN 도메인의 현재 프로젝트 `member`/`admin` 또는 명시적
+  `baremetal_requester`/`baremetal_operator`만 자신의 신청과 임대 노드를 볼 수
+  있습니다. 토큰의 사용자·프로젝트 도메인이 모두 설정된 DCN 도메인 UUID와
+  일치해야 하며 도메인 상속 역할은 사용하지 않습니다.
+- 임대 노드의 배포·전원·반납은 현재 프로젝트의 `admin` 또는 명시적
+  `baremetal_operator`만 수행합니다. 승인 전, 거부, 취소, 반납 완료 요청은
+  조회만 가능하며 노드 작업 API가 거부합니다.
 - 노드 reservation은 DB 고유 제약과 request version 비교로 중복 승인을 막습니다.
 - 반납과 만료는 Ironic undeploy/cleaning 성공 후에만 lessee와 reservation을 해제합니다.
 

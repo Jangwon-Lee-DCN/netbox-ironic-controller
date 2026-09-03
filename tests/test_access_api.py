@@ -15,11 +15,14 @@ IMAGE_ID = "11111111-1111-1111-1111-111111111111"
 class Auth:
     async def validate(self, token):
         actors = {
-            "tenant-a": Actor("user-a", "project-a", frozenset({"baremetal_requester"})),
-            "tenant-b": Actor("user-b", "project-b", frozenset({"baremetal_requester"})),
-            "tenant-op": Actor("operator-a", "project-a", frozenset({"baremetal_operator"})),
+            "tenant-a": Actor("user-a", "project-a", frozenset({"baremetal_requester"}), "dcn-domain", "dcn-domain"),
+            "tenant-b": Actor("user-b", "project-b", frozenset({"baremetal_requester"}), "dcn-domain", "dcn-domain"),
+            "tenant-op": Actor("operator-a", "project-a", frozenset({"baremetal_operator"}), "dcn-domain", "dcn-domain"),
             "admin": Actor("admin", "dcn", frozenset({"baremetal_admin"})),
             "member": Actor("member", "project-a", frozenset({"member"})),
+            "dcn-member": Actor("dcn-member", "project-a", frozenset({"member"}), "dcn-domain", "dcn-domain"),
+            "dcn-owner": Actor("dcn-owner", "project-a", frozenset({"admin"}), "dcn-domain", "dcn-domain"),
+            "other-member": Actor("other-member", "project-a", frozenset({"member"}), "other-domain", "other-domain"),
         }
         return actors[token]
 
@@ -44,7 +47,9 @@ class Runtime:
 def app(tmp_path):
     app = FastAPI()
     app.include_router(router)
-    app.state.settings = Settings(access_dcn_project_id="dcn", access_max_lease_days=30)
+    app.state.settings = Settings(
+        access_dcn_project_id="dcn", access_dcn_domain_id="dcn-domain", access_max_lease_days=30,
+    )
     app.state.access_store = AccessStore(tmp_path / "api.db")
     app.state.access_auth = Auth()
     app.state.access_coordinator = AccessCoordinator(app.state.access_store, Inventory(), Runtime(), "dcn")
@@ -97,10 +102,23 @@ async def test_deploy_image_catalog_contains_only_approved_identity(tmp_path):
 async def test_plain_member_and_excessive_lease_are_rejected(tmp_path):
     async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
         assert (await submit(api, "member")).status_code == 403
+        assert (await submit(api, "other-member")).status_code == 403
+        assert (await submit(api, "dcn-member")).status_code == 201
         response = await api.post("/v1/requests", headers={"X-Auth-Token": "tenant-a"}, json={
             "profile": "general-1u", "quantity": 1, "purpose": "research", "lease_days": 31,
         })
     assert response.status_code == 422
+
+
+async def test_project_detail_is_visible_only_in_current_project(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        own = (await submit(api, "dcn-member")).json()
+        other = (await submit(api, "tenant-b")).json()
+        response = await api.get(f"/v1/requests/{own['id']}", headers={"X-Auth-Token": "dcn-member"})
+        hidden = await api.get(f"/v1/requests/{other['id']}", headers={"X-Auth-Token": "dcn-member"})
+    assert response.status_code == 200
+    assert response.json()["id"] == own["id"]
+    assert hidden.status_code == 404
 
 
 async def test_approved_node_is_visible_only_to_admin_and_lessee_project(tmp_path):
@@ -127,7 +145,7 @@ async def test_return_endpoint_accepts_cleaning_asynchronously(tmp_path):
         )).json()
         response = await api.post(
             f"/v1/requests/{created['id']}/return",
-            headers={"X-Auth-Token": "tenant-a"}, json={"version": leased["version"]},
+            headers={"X-Auth-Token": "tenant-op"}, json={"version": leased["version"]},
         )
     assert response.status_code == 202
     assert application.state.access_store.get(created["id"]).state.value == "returned"
@@ -166,7 +184,7 @@ async def test_only_lessee_operator_can_call_deploy_and_power_endpoints(tmp_path
         assert (await api.post(
             f"/v1/requests/{created['id']}/deploy",
             headers={"X-Auth-Token": "tenant-a"}, json=payload,
-        )).status_code == 409
+        )).status_code == 403
         deploy = await api.post(
             f"/v1/requests/{created['id']}/deploy",
             headers={"X-Auth-Token": "tenant-op", "Idempotency-Key": "deploy-operation-key"},
@@ -207,3 +225,19 @@ async def test_only_lessee_operator_can_call_deploy_and_power_endpoints(tmp_path
         assert operations.status_code == 200
         assert [item["operation"] for item in operations.json()] == ["deploy", "power"]
         assert all(item["state"] == "succeeded" for item in operations.json())
+
+
+async def test_dcn_project_owner_can_launch_its_leased_node(tmp_path):
+    async with AsyncClient(transport=ASGITransport(app=app(tmp_path)), base_url="http://test") as api:
+        created = (await submit(api, "dcn-owner")).json()
+        leased = (await api.post(
+            f"/v1/admin/requests/{created['id']}/approve", headers={"X-Auth-Token": "admin"},
+            json={"version": created["version"]},
+        )).json()
+        response = await api.post(
+            f"/v1/requests/{created['id']}/deploy",
+            headers={"X-Auth-Token": "dcn-owner", "Idempotency-Key": "owner-deploy-key"},
+            json={"version": leased["version"], "node_uuid": NODE_ID, "image_id": IMAGE_ID,
+                  "hostname": "owner-node", "user_data": "#cloud-config\n"},
+        )
+    assert response.status_code == 202
