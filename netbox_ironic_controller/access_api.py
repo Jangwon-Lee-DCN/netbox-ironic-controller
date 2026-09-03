@@ -91,8 +91,8 @@ async def current_actor(request: Request, x_auth_token: str = Header(default="")
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-def require_requester(actor: Actor) -> None:
-    if not actor.roles.intersection({"baremetal_requester", "baremetal_operator", "baremetal_admin"}):
+def require_requester(actor: Actor, dcn_domain_id: str) -> None:
+    if not actor.can_request(dcn_domain_id):
         raise HTTPException(status_code=403, detail="baremetal requester role is required")
 
 
@@ -130,8 +130,8 @@ def start_operation(request: Request, operation_id: str) -> None:
 async def create_request(payload: RequestCreate, request: Request,
                          idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                          actor: Actor = Depends(current_actor)) -> RequestView:
-    require_requester(actor)
     settings = request.app.state.settings
+    require_requester(actor, settings.access_dcn_domain_id)
     if payload.lease_days > settings.access_max_lease_days:
         raise HTTPException(status_code=422, detail="lease exceeds the configured maximum")
     item = AccessRequest(
@@ -148,15 +148,29 @@ async def create_request(payload: RequestCreate, request: Request,
 
 @router.get("/requests", response_model=list[RequestView])
 async def list_requests(request: Request, actor: Actor = Depends(current_actor)) -> list[RequestView]:
-    require_requester(actor)
     settings = request.app.state.settings
+    require_requester(actor, settings.access_dcn_domain_id)
     items = await to_thread(request.app.state.access_store.list_for_project, actor.project_id)
     return [view(item, actor, settings.access_dcn_project_id) for item in items]
 
 
+@router.get("/requests/{request_id}", response_model=RequestView)
+async def get_request(request_id: str, request: Request,
+                      actor: Actor = Depends(current_actor)) -> RequestView:
+    settings = request.app.state.settings
+    require_requester(actor, settings.access_dcn_domain_id)
+    try:
+        item = await to_thread(request.app.state.access_store.get, request_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="request not found") from exc
+    if item.project_id != actor.project_id:
+        raise HTTPException(status_code=404, detail="request not found")
+    return view(item, actor, settings.access_dcn_project_id)
+
+
 @router.get("/offers", response_model=list[OfferView])
 async def list_offers(request: Request, actor: Actor = Depends(current_actor)) -> list[OfferView]:
-    require_requester(actor)
+    require_requester(actor, request.app.state.settings.access_dcn_domain_id)
     candidates = await request.app.state.access_coordinator.inventory.candidates(None, None)
     grouped: dict[tuple[str, str], list] = {}
     for candidate in candidates:
@@ -174,7 +188,7 @@ async def list_offers(request: Request, actor: Actor = Depends(current_actor)) -
 @router.get("/deploy-images", response_model=list[DeployImageView])
 async def list_deploy_images(request: Request,
                              actor: Actor = Depends(current_actor)) -> list[DeployImageView]:
-    require_requester(actor)
+    require_requester(actor, request.app.state.settings.access_dcn_domain_id)
     rows = await request.app.state.access_coordinator.runtime.approved_images()
     return [DeployImageView(**row) for row in rows]
 
@@ -208,8 +222,10 @@ async def return_request(request_id: str, payload: VersionedAction, request: Req
                          background_tasks: BackgroundTasks,
                          actor: Actor = Depends(current_actor)) -> RequestView:
     settings = request.app.state.settings
+    require_requester(actor, settings.access_dcn_domain_id)
+    if not actor.can_operate():
+        raise HTTPException(status_code=403, detail="baremetal operator role is required")
     try:
-        require_requester(actor)
         coordinator = request.app.state.access_coordinator
         item = await coordinator.begin_return(request_id, actor, payload.version)
         background_tasks.add_task(coordinator.complete_return, request_id, actor, False)
@@ -223,7 +239,7 @@ async def cancel_request(request_id: str, payload: VersionedAction, request: Req
                          actor: Actor = Depends(current_actor)) -> RequestView:
     settings = request.app.state.settings
     try:
-        require_requester(actor)
+        require_requester(actor, settings.access_dcn_domain_id)
         item = await request.app.state.access_coordinator.cancel(request_id, actor, payload.version)
     except (DomainError, VersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -248,6 +264,9 @@ async def reject_request(request_id: str, payload: DecisionAction, request: Requ
 async def deploy_node(request_id: str, payload: DeployAction, request: Request,
                       idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                       actor: Actor = Depends(current_actor)) -> OperationView:
+    require_requester(actor, request.app.state.settings.access_dcn_domain_id)
+    if not actor.can_operate():
+        raise HTTPException(status_code=403, detail="baremetal operator role is required")
     try:
         if idempotency_key is not None and not (8 <= len(idempotency_key) <= 128):
             raise ValueError("invalid Idempotency-Key")
@@ -266,6 +285,9 @@ async def deploy_node(request_id: str, payload: DeployAction, request: Request,
 async def power_node(request_id: str, payload: PowerAction, request: Request,
                      idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
                      actor: Actor = Depends(current_actor)) -> OperationView:
+    require_requester(actor, request.app.state.settings.access_dcn_domain_id)
+    if not actor.can_operate():
+        raise HTTPException(status_code=403, detail="baremetal operator role is required")
     try:
         if idempotency_key is not None and not (8 <= len(idempotency_key) <= 128):
             raise ValueError("invalid Idempotency-Key")
@@ -281,7 +303,7 @@ async def power_node(request_id: str, payload: PowerAction, request: Request,
 @router.get("/requests/{request_id}/operations", response_model=list[OperationView])
 async def list_node_operations(request_id: str, request: Request,
                                actor: Actor = Depends(current_actor)) -> list[OperationView]:
-    require_requester(actor)
+    require_requester(actor, request.app.state.settings.access_dcn_domain_id)
     try:
         item = await to_thread(request.app.state.access_store.get, request_id)
     except KeyError as exc:

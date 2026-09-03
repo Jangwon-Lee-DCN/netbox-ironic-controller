@@ -211,7 +211,7 @@ class AccessCoordinator:
             raise VersionConflict(f"expected version {expected_version}, got {item.version}")
         if actor.project_id != item.project_id:
             raise ValueError("lessee project is required")
-        if not actor.roles.intersection({"baremetal_operator", "baremetal_admin"}):
+        if not actor.can_operate():
             raise ValueError("baremetal_operator role is required")
         if item.state != RequestState.LEASED or node_uuid not in item.node_uuids:
             raise ValueError("node is not leased by this request")

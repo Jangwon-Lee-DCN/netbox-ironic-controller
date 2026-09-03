@@ -67,4 +67,6 @@ def actor_from_token_body(body: dict) -> Actor:
         user_id=user["id"],
         project_id=project["id"],
         roles=frozenset(role["name"] for role in token.get("roles") or [] if role.get("name")),
+        user_domain_id=(user.get("domain") or {}).get("id", ""),
+        project_domain_id=(project.get("domain") or {}).get("id", ""),
     )

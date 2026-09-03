@@ -29,6 +29,21 @@ class Actor:
     user_id: str
     project_id: str
     roles: frozenset[str]
+    user_domain_id: str = ""
+    project_domain_id: str = ""
+
+    def can_request(self, dcn_domain_id: str) -> bool:
+        return bool(
+            dcn_domain_id
+            and self.user_domain_id == dcn_domain_id
+            and self.project_domain_id == dcn_domain_id
+            and self.roles.intersection({
+                "member", "admin", "baremetal_requester", "baremetal_operator", "baremetal_admin",
+            })
+        )
+
+    def can_operate(self) -> bool:
+        return bool(self.roles.intersection({"baremetal_operator", "baremetal_admin", "admin"}))
 
     def require_admin(self, dcn_project_id: str) -> None:
         if self.project_id != dcn_project_id or "baremetal_admin" not in self.roles:
