@@ -41,6 +41,19 @@ NetBox 자체의 예제 설치와 Secret 동기화는
 컨트롤러 계약의 일부가 아니라 선택적 개발/검증 환경입니다. 운영 인벤토리와
 Ironic 배치 결정은 `openstack-production-datacenter`가 권위 원본입니다.
 
+## DCN switch port panel
+
+`netbox_dcn_port_panel` is an optional NetBox 4.6 plugin which adds a physical
+port-panel tab to Device pages and a switch-panel index. It renders NetBox
+Interface/Cable state immediately and refreshes operational observations every
+30 seconds. Missing or stale observations fail closed to `UNKNOWN`; configured
+`enabled` or Cable presence is never presented as live carrier state.
+
+The production values deliberately leave the plugin disabled until a custom
+NetBox image built from `Dockerfile.netbox` passes authenticated browser
+acceptance and its immutable digest is recorded by the production change
+contract. Switch credentials are not accepted by or stored in the plugin.
+
 ## 개발 및 테스트
 
 ```bash

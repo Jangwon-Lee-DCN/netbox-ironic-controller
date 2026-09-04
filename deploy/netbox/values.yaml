@@ -15,6 +15,14 @@ csrf:
 timeZone: Asia/Seoul
 defaultLanguage: ko-kr
 
+# Requires the immutable custom image built from Dockerfile.netbox. Keep the
+# plugin disabled until browser acceptance passes for the selected digest.
+plugins: []
+pluginsConfig:
+  netbox_dcn_port_panel:
+    refresh_seconds: 30
+    stale_seconds: 180
+
 superuser:
   name: admin
   email: admin@example.com

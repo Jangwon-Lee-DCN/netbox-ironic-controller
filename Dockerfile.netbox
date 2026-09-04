@@ -1,0 +1,9 @@
+FROM ghcr.io/netbox-community/netbox:v4.6.5
+
+USER root
+WORKDIR /tmp/netbox-dcn-port-panel
+COPY port-panel-pyproject.toml ./pyproject.toml
+COPY netbox_dcn_port_panel ./netbox_dcn_port_panel
+RUN uv pip install --python /opt/netbox/venv/bin/python --no-cache --no-deps . \
+    && rm -rf /tmp/netbox-dcn-port-panel
+WORKDIR /opt/netbox/netbox
