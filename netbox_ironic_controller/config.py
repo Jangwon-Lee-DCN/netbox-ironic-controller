@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     sync_site_slug: str = "example-site"
     access_enabled: bool = False
     access_database_path: str = "/var/lib/baremetal-access/access.db"
+    access_database_url: str = ""
     access_dcn_project_id: str = ""
     access_dcn_domain_id: str = ""
     access_max_lease_days: int = 30

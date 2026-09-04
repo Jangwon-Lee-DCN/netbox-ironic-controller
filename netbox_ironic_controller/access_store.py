@@ -5,7 +5,10 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
+
+import pymysql
 
 from .access_domain import AccessRequest, DomainError, RequestState
 from .access_operations import NodeOperation, OperationState
@@ -72,6 +75,40 @@ CREATE TABLE IF NOT EXISTS operation_idempotency (
 );
 """
 
+MYSQL_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS access_requests (
+      id VARCHAR(64) PRIMARY KEY, project_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL,
+      profile VARCHAR(255) NOT NULL, quantity INTEGER NOT NULL, purpose TEXT NOT NULL,
+      requested_until VARCHAR(64) NOT NULL, rack VARCHAR(255), state VARCHAR(32) NOT NULL,
+      node_uuids TEXT NOT NULL, reviewer_id VARCHAR(64), decision_reason TEXT,
+      version INTEGER NOT NULL DEFAULT 0) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS node_reservations (
+      node_uuid VARCHAR(64) PRIMARY KEY, request_id VARCHAR(64) NOT NULL,
+      project_id VARCHAR(64) NOT NULL, created_at VARCHAR(64) NOT NULL,
+      CONSTRAINT fk_reservation_request FOREIGN KEY(request_id) REFERENCES access_requests(id)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS access_audit_events (
+      id VARCHAR(64) PRIMARY KEY, request_id VARCHAR(64) NOT NULL, actor_user_id VARCHAR(64) NOT NULL,
+      actor_project_id VARCHAR(64) NOT NULL, action VARCHAR(64) NOT NULL, before_json TEXT NOT NULL,
+      after_json TEXT NOT NULL, created_at VARCHAR(64) NOT NULL,
+      INDEX idx_audit_request(request_id)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS request_idempotency (
+      project_id VARCHAR(64) NOT NULL, idempotency_key VARCHAR(128) NOT NULL,
+      request_id VARCHAR(64) NOT NULL, PRIMARY KEY(project_id,idempotency_key),
+      CONSTRAINT fk_request_idempotency FOREIGN KEY(request_id) REFERENCES access_requests(id)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS node_operations (
+      id VARCHAR(64) PRIMARY KEY, request_id VARCHAR(64) NOT NULL, project_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL, node_uuid VARCHAR(64) NOT NULL, operation VARCHAR(32) NOT NULL,
+      payload_json TEXT NOT NULL, state VARCHAR(32) NOT NULL, error TEXT,
+      created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL,
+      INDEX idx_operation_request(request_id), INDEX idx_operation_node(node_uuid,state),
+      CONSTRAINT fk_operation_request FOREIGN KEY(request_id) REFERENCES access_requests(id)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS operation_idempotency (
+      project_id VARCHAR(64) NOT NULL, operation VARCHAR(32) NOT NULL,
+      idempotency_key VARCHAR(128) NOT NULL, operation_id VARCHAR(64) NOT NULL,
+      PRIMARY KEY(project_id,operation,idempotency_key),
+      CONSTRAINT fk_operation_idempotency FOREIGN KEY(operation_id) REFERENCES node_operations(id)) ENGINE=InnoDB""",
+)
+
 
 class VersionConflict(DomainError):
     pass
@@ -82,20 +119,27 @@ class NodeAlreadyReserved(DomainError):
 
 
 class AccessStore:
-    """Small transactional store; SQLite in development, PostgreSQL replaces this adapter in production."""
+    """Transactional store using SQLite for development and MariaDB for production."""
 
     def __init__(self, path: str | Path):
         self.path = str(path)
+        self.mysql = self.path.startswith(("mysql://", "mariadb://"))
+        self.mysql_config = self._mysql_config(self.path) if self.mysql else None
         with self._connect() as connection:
-            connection.executescript(SCHEMA)
-            connection.execute(
-                """UPDATE node_operations SET state='failed', error=?, updated_at=?
-                WHERE state IN ('queued','running')""",
-                (
-                    "service restarted before operation completion; operator reconciliation required",
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+            if self.mysql:
+                for statement in MYSQL_SCHEMA:
+                    connection.execute(statement)
+                connection.commit()
+            else:
+                connection.executescript(SCHEMA)
+                connection.execute(
+                    """UPDATE node_operations SET state='failed', error=?, updated_at=?
+                    WHERE state IN ('queued','running')""",
+                    (
+                        "service restarted before operation completion; operator reconciliation required",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
 
     def create(self, request: AccessRequest) -> None:
         self.create_idempotent(request, None)
@@ -147,6 +191,10 @@ class AccessStore:
             rows = connection.execute("SELECT * FROM access_requests ORDER BY id").fetchall()
         return [self._from_row(row) for row in rows]
 
+    def ping(self) -> None:
+        with self._connect() as connection:
+            connection.execute("SELECT 1").fetchone()
+
     def save_with_reservations(self, request: AccessRequest, expected_version: int,
                                actor_user_id: str, actor_project_id: str,
                                action: str = "approve") -> None:
@@ -163,7 +211,7 @@ class AccessStore:
                         "INSERT INTO node_reservations(node_uuid,request_id,project_id,created_at) VALUES(?,?,?,?)",
                         (node_uuid, request.id, request.project_id, datetime.now(timezone.utc).isoformat()),
                     )
-            except sqlite3.IntegrityError as exc:
+            except (sqlite3.IntegrityError, pymysql.IntegrityError) as exc:
                 raise NodeAlreadyReserved("one or more nodes are already reserved") from exc
             cursor = connection.execute(
                 """UPDATE access_requests SET state=?,node_uuids=?,reviewer_id=?,decision_reason=?,version=?
@@ -322,7 +370,7 @@ class AccessStore:
     def _transaction(self):
         connection = self._connect()
         try:
-            connection.execute("BEGIN IMMEDIATE")
+            connection.begin() if self.mysql else connection.execute("BEGIN IMMEDIATE")
             yield connection
             connection.commit()
         except Exception:
@@ -331,10 +379,30 @@ class AccessStore:
         finally:
             connection.close()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self):
+        if self.mysql:
+            return _MySQLConnection(self.mysql_config)
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @staticmethod
+    def _mysql_config(url: str) -> dict:
+        parsed = urlparse(url)
+        if not parsed.hostname or not parsed.username or not parsed.path.strip("/"):
+            raise ValueError("MariaDB URL requires host, username and database")
+        return {
+            "host": parsed.hostname,
+            "port": parsed.port or 3306,
+            "user": unquote(parsed.username),
+            "password": unquote(parsed.password or ""),
+            "database": parsed.path.strip("/"),
+            "connect_timeout": 10,
+            "read_timeout": 30,
+            "write_timeout": 30,
+            "cursorclass": pymysql.cursors.DictCursor,
+            "autocommit": False,
+        }
 
     @staticmethod
     def _values(request: AccessRequest) -> tuple:
@@ -371,3 +439,33 @@ class AccessStore:
             return {}
         return {"state": str(request.state), "version": request.version,
                 "node_uuids": request.node_uuids, "project_id": request.project_id}
+
+
+class _MySQLConnection:
+    """Expose the sqlite-like connection surface used by AccessStore."""
+
+    def __init__(self, config: dict):
+        self.connection = pymysql.connect(**config)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+    def execute(self, statement: str, parameters=()):
+        cursor = self.connection.cursor()
+        cursor.execute(statement.replace("?", "%s"), parameters)
+        return cursor
+
+    def begin(self):
+        self.connection.begin()
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
