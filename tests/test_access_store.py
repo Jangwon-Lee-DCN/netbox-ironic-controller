@@ -35,6 +35,15 @@ def test_project_listing_never_returns_other_projects(tmp_path):
     assert created[0]["before_json"] == "{}"
 
 
+def test_mariadb_url_is_parsed_without_exposing_credentials():
+    config = AccessStore._mysql_config(
+        "mysql://baremetal:secret%2Fvalue@mariadb.openstack.svc:3306/baremetal_access"
+    )
+    assert config["host"] == "mariadb.openstack.svc"
+    assert config["database"] == "baremetal_access"
+    assert config["password"] == "secret/value"
+
+
 def test_node_reservation_is_unique_across_requests(tmp_path):
     store = AccessStore(tmp_path / "access.db")
     first, second = make_request("a", "project-a"), make_request("b", "project-b")

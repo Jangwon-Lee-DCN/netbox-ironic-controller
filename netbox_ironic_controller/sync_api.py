@@ -69,14 +69,24 @@ app.include_router(access_router)
 
 @app.get("/healthz")
 async def healthz():
+    database_error = None
+    if app.state.settings.access_enabled:
+        try:
+            await asyncio.to_thread(app.state.access_store.ping)
+        except Exception as exc:
+            database_error = str(exc)
     expiry_error = getattr(app.state, "last_expiry_error", None)
-    return {
-        "status": "degraded" if app.state.last_error or expiry_error else "ok",
+    payload = {
+        "status": "degraded" if app.state.last_error or expiry_error or database_error else "ok",
         "last_success": app.state.last_success,
         "last_error": app.state.last_error,
         "last_expiry_success": getattr(app.state, "last_expiry_success", None),
         "last_expiry_error": expiry_error,
+        "database_error": database_error,
     }
+    if database_error:
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
 
 
 @app.post("/reconcile")

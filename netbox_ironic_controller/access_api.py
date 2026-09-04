@@ -321,7 +321,9 @@ def configure_access(app, settings, netbox, ironic) -> None:
     from .access_inventory import IronicLeaseAdapter, NetBoxIronicOfferInventory
     from .access_service import AccessCoordinator
 
-    app.state.access_store = AccessStore(settings.access_database_path)
+    app.state.access_store = AccessStore(
+        settings.access_database_url or settings.access_database_path
+    )
     app.state.access_tasks = set()
     app.state.access_auth = KeystoneTokenValidator(settings)
     app.state.access_coordinator = AccessCoordinator(
