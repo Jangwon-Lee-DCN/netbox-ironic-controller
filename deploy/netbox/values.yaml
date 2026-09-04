@@ -15,9 +15,16 @@ csrf:
 timeZone: Asia/Seoul
 defaultLanguage: ko-kr
 
-# Requires the immutable custom image built from Dockerfile.netbox. Keep the
-# plugin disabled until browser acceptance passes for the selected digest.
-plugins: []
+# Accepted immutable image built from Dockerfile.netbox by the serialized DCN
+# image queue. Production acceptance is recorded by the central change contract.
+image:
+  registry: registry.dcn.ssu.ac.kr
+  repository: openstack/netbox
+  tag: port-panel-a076513a1867fc5235ed
+  digest: sha256:0c402c1e996f71e0f56e47f7d134b5002b45f7c090796bb8abe15b916d5f4589
+  pullPolicy: IfNotPresent
+plugins:
+  - netbox_dcn_port_panel
 pluginsConfig:
   netbox_dcn_port_panel:
     refresh_seconds: 30
