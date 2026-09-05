@@ -1,0 +1,16 @@
+{% extends 'base/layout.html' %}
+{% block title %}Switch Port Panels{% endblock %}
+{% block content %}
+<div class="container-fluid">
+  <h1>Switch Port Panels</h1>
+  <div class="row row-cols-1 row-cols-md-2 g-3">
+    {% for device in devices %}
+    <div class="col"><div class="card"><div class="card-body">
+      <h2 class="h5">{{ device|linkify }}</h2>
+      <div>{{ device.device_type }} · {{ device.rack|default:"Rack unknown" }}</div>
+      <a class="btn btn-primary mt-2" href="{{ device.get_absolute_url }}port-panel/">Open port panel</a>
+    </div></div></div>
+    {% empty %}<p>No network switches are visible.</p>{% endfor %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-dcn-port-panel"
+version = "0.2.0"
+description = "DCN switch and server interface panels for NetBox 4.6"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+include = ["netbox_dcn_port_panel*"]
+
+[tool.setuptools.package-data]
+netbox_dcn_port_panel = ["templates/**/*.html", "static/**/*"]

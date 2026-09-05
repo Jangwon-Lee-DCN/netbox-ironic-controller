@@ -21,4 +21,4 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["netbox_ironic_controller*"]
+include = ["netbox_ironic_controller*", "netbox_dcn_port_panel*"]
