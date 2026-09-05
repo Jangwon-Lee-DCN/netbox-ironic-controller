@@ -12,6 +12,7 @@ expected_device = os.environ.get("PORT_PANEL_DEVICE", "tor-dev")
 expected_ports = int(os.environ.get("PORT_PANEL_EXPECTED_PORTS", "2"))
 expected_heading = os.environ.get("PORT_PANEL_EXPECTED_HEADING", "Physical port panel")
 expected_peer = os.environ.get("PORT_PANEL_EXPECTED_PEER")
+expected_state = os.environ.get("PORT_PANEL_EXPECTED_STATE")
 device_id = os.environ.get("PORT_PANEL_DEVICE_ID")
 screenshot_path = os.environ.get("PORT_PANEL_SCREENSHOT")
 viewport_width = int(os.environ.get("PORT_PANEL_VIEWPORT_WIDTH", "1440"))
@@ -27,9 +28,9 @@ with sync_playwright() as playwright:
     page.on("requestfailed", lambda request: errors.append(f"request:{request.url}:{request.failure}"))
     page.on("response", lambda response: http_errors.append((response.status, response.url)) if response.status >= 400 else None)
     page.goto(f"{base}/login/", wait_until="networkidle")
-    page.get_by_label("Username").fill(username)
-    page.get_by_label("Password").fill(password)
-    page.get_by_role("button", name="Sign In").click()
+    page.locator('input[name="username"]').fill(username)
+    page.locator('input[name="password"]').fill(password)
+    page.locator('button[type="submit"]').click()
     page.wait_for_load_state("networkidle")
     page.goto(f"{base}/plugins/dcn-port-panel/", wait_until="networkidle")
     if device_id:
@@ -42,6 +43,8 @@ with sync_playwright() as playwright:
     assert page.locator("#port-panel .port").count() == expected_ports
     if expected_peer:
         assert page.get_by_text(expected_peer, exact=False).is_visible()
+    if expected_state:
+        assert page.locator("#port-panel .port-state", has_text=expected_state).first.is_visible()
     page.wait_for_timeout(1000)
     assert "Loading" not in page.locator("#panel-summary").inner_text()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
