@@ -13,12 +13,15 @@ expected_ports = int(os.environ.get("PORT_PANEL_EXPECTED_PORTS", "2"))
 expected_heading = os.environ.get("PORT_PANEL_EXPECTED_HEADING", "Physical port panel")
 expected_peer = os.environ.get("PORT_PANEL_EXPECTED_PEER")
 device_id = os.environ.get("PORT_PANEL_DEVICE_ID")
+screenshot_path = os.environ.get("PORT_PANEL_SCREENSHOT")
+viewport_width = int(os.environ.get("PORT_PANEL_VIEWPORT_WIDTH", "1440"))
+viewport_height = int(os.environ.get("PORT_PANEL_VIEWPORT_HEIGHT", "1000"))
 errors = []
 http_errors = []
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
-    page = browser.new_page()
+    page = browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
     page.on("console", lambda message: errors.append(f"console:{message.type}:{message.text}") if message.type in {"error", "warning"} else None)
     page.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
     page.on("requestfailed", lambda request: errors.append(f"request:{request.url}:{request.failure}"))
@@ -41,6 +44,12 @@ with sync_playwright() as playwright:
         assert page.get_by_text(expected_peer, exact=False).is_visible()
     page.wait_for_timeout(1000)
     assert "Loading" not in page.locator("#panel-summary").inner_text()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    for port in page.locator("#port-panel .port").all():
+        box = port.bounding_box()
+        assert box and box["x"] >= 0 and box["x"] + box["width"] <= viewport_width
+    if screenshot_path:
+        page.screenshot(path=screenshot_path, full_page=True)
     assert not errors, errors
     assert not http_errors, http_errors
     browser.close()
