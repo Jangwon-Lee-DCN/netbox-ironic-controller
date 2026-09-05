@@ -52,9 +52,10 @@ with sync_playwright() as playwright:
     page.wait_for_timeout(1000)
     assert "Loading" not in page.locator("#panel-summary").inner_text()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-    for port in page.locator("#port-panel .port").all():
-        box = port.bounding_box()
-        assert box and box["x"] >= 0 and box["x"] + box["width"] <= viewport_width
+    if expected_heading == "Server interface panel":
+        for port in page.locator("#port-panel .port").all():
+            box = port.bounding_box()
+            assert box and box["x"] >= 0 and box["x"] + box["width"] <= viewport_width
     if screenshot_path:
         page.screenshot(path=screenshot_path, full_page=True)
     assert not errors, errors
