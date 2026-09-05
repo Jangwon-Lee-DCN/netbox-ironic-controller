@@ -12,6 +12,7 @@ expected_device = os.environ.get("PORT_PANEL_DEVICE", "tor-dev")
 expected_ports = int(os.environ.get("PORT_PANEL_EXPECTED_PORTS", "2"))
 expected_heading = os.environ.get("PORT_PANEL_EXPECTED_HEADING", "Physical port panel")
 expected_peer = os.environ.get("PORT_PANEL_EXPECTED_PEER")
+device_id = os.environ.get("PORT_PANEL_DEVICE_ID")
 errors = []
 http_errors = []
 
@@ -28,8 +29,11 @@ with sync_playwright() as playwright:
     page.get_by_role("button", name="Sign In").click()
     page.wait_for_load_state("networkidle")
     page.goto(f"{base}/plugins/dcn-port-panel/", wait_until="networkidle")
-    assert page.get_by_text(expected_device).is_visible()
-    page.get_by_role("link", name="Open port panel").click()
+    if device_id:
+        page.goto(f"{base}/dcim/devices/{device_id}/port-panel/", wait_until="networkidle")
+    else:
+        assert page.get_by_text(expected_device).is_visible()
+        page.get_by_role("link", name="Open port panel").click()
     page.wait_for_load_state("networkidle")
     assert page.get_by_text(expected_heading).is_visible()
     assert page.locator("#port-panel .port").count() == expected_ports
