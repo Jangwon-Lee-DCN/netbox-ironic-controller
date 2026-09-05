@@ -3,19 +3,19 @@
 {% block content %}
 <link rel="stylesheet" href="{% url 'plugins:netbox_dcn_port_panel:panel-css' %}">
 <div class="card">
-  <div class="card-header d-flex justify-content-between"><strong>{% if is_switch %}Physical port panel{% else %}Server interface panel{% endif %}</strong><span id="panel-summary">Loading status…</span></div>
+  <div class="card-header d-flex justify-content-between"><strong>{% if is_server %}Server interface panel{% else %}Physical port panel{% endif %}</strong><span id="panel-summary">Loading status…</span></div>
   <div class="card-body">
     <div class="port-legend"><span class="port up">UP</span><span class="port down">DOWN</span><span class="port unknown">UNKNOWN</span><span class="port disabled">DISABLED</span></div>
-    <div id="port-panel" class="{% if is_switch %}port-panel{% else %}server-interface-panel{% endif %}" data-status-url="{% url 'plugins:netbox_dcn_port_panel:port-status' pk=object.pk %}">
+    <div id="port-panel" class="{% if is_server %}server-interface-panel{% else %}port-panel{% endif %}" data-status-url="{% url 'plugins:netbox_dcn_port_panel:port-status' pk=object.pk %}">
       {% for port in ports %}
-      <a id="port-{{ port.id }}" class="port {{ port.oper_status }}{% if not port.enabled %} disabled{% endif %}{% if not is_switch %} server-interface{% endif %}" href="{{ port.url }}" title="{{ port.name }}{% if port.peer %} → {{ port.peer }}{% endif %}">
+      <a id="port-{{ port.id }}" class="port {{ port.oper_status }}{% if not port.enabled %} disabled{% endif %}{% if is_server %} server-interface{% endif %}" href="{{ port.url }}" title="{{ port.name }}{% if port.peer %} → {{ port.peer }}{% endif %}">
         <span class="port-heading"><span class="port-name">{{ port.name }}</span><span class="port-state">{{ port.oper_status|upper }}</span></span>
-        {% if not is_switch %}
+        {% if is_server %}
         <span class="interface-meta">{{ port.type }}{% if port.mac %} · {{ port.mac }}{% endif %}</span>
         <span class="interface-meta">{% if port.speed_mbps %}{{ port.speed_mbps }} Mbps{% else %}Speed unknown{% endif %}{% if port.mtu %} · MTU {{ port.mtu }}{% endif %}</span>
         {% endif %}
-        {% if port.peer %}<span class="port-peer">↔ {{ port.peer }}</span>{% elif not is_switch %}<span class="port-peer text-muted">No measured switch termination</span>{% endif %}
-        {% if not is_switch and port.vlans %}<span class="interface-meta">VLAN {{ port.vlans|join:", " }}</span>{% endif %}
+        {% if port.peer %}<span class="port-peer">↔ {{ port.peer }}</span>{% elif is_server %}<span class="port-peer text-muted">No measured switch termination</span>{% endif %}
+        {% if is_server and port.vlans %}<span class="interface-meta">VLAN {{ port.vlans|join:", " }}</span>{% endif %}
       </a>
       {% endfor %}
     </div>

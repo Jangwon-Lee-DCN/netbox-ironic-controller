@@ -65,7 +65,7 @@ class PortPanelView(PermissionRequiredMixin, generic.ObjectView):
         device = get_object_or_404(self.queryset, pk=pk)
         refresh_seconds, _ = _settings()
         return render(request, self.template_name, {"object": device, "tab": self.tab,
-                      "is_switch": device.role.slug == "network-switch",
+                      "is_server": device.role.slug in {"server", "storage"},
                       "ports": _ports(device), "refresh_seconds": refresh_seconds})
 
 

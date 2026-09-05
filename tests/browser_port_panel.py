@@ -17,12 +17,16 @@ device_id = os.environ.get("PORT_PANEL_DEVICE_ID")
 screenshot_path = os.environ.get("PORT_PANEL_SCREENSHOT")
 viewport_width = int(os.environ.get("PORT_PANEL_VIEWPORT_WIDTH", "1440"))
 viewport_height = int(os.environ.get("PORT_PANEL_VIEWPORT_HEIGHT", "1000"))
+ignore_https_errors = os.environ.get("PORT_PANEL_IGNORE_HTTPS_ERRORS", "false").lower() == "true"
 errors = []
 http_errors = []
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
-    page = browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
+    page = browser.new_page(
+        viewport={"width": viewport_width, "height": viewport_height},
+        ignore_https_errors=ignore_https_errors,
+    )
     page.on("console", lambda message: errors.append(f"console:{message.type}:{message.text}") if message.type in {"error", "warning"} else None)
     page.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
     page.on("requestfailed", lambda request: errors.append(f"request:{request.url}:{request.failure}"))
