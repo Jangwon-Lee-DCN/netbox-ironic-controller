@@ -19,9 +19,15 @@ def _settings():
 
 
 def _port(device, interface, stale_seconds):
-    observation = normalize_observation(cache.get(f"dcn-port-status:{device.pk}:{interface.pk}"), stale_seconds=stale_seconds)
     endpoints = list(interface.connected_endpoints or [])
     peer = endpoints[0] if endpoints else None
+    direct = cache.get(f"dcn-port-status:{device.pk}:{interface.pk}")
+    peer_value = None
+    if not direct and isinstance(peer, Interface) and peer.device.role.slug == "network-switch":
+        peer_value = cache.get(f"dcn-port-status:{peer.device_id}:{peer.pk}")
+    observation = normalize_observation(direct or peer_value, stale_seconds=stale_seconds)
+    state_source = "interface" if direct else ("connected-switch-port" if peer_value else "unobserved")
+    tagged = list(interface.tagged_vlans.all())
     return {
         "id": interface.pk,
         "name": interface.name,
@@ -31,7 +37,14 @@ def _port(device, interface, stale_seconds):
         "mode": interface.get_mode_display() if interface.mode else "",
         "peer": f"{peer.device.name}:{peer.name}" if isinstance(peer, Interface) else None,
         "peer_url": peer.get_absolute_url() if peer else None,
+        "peer_device": peer.device.name if isinstance(peer, Interface) else None,
+        "peer_interface": peer.name if isinstance(peer, Interface) else None,
         "cabled": bool(interface.cable_id),
+        "cable_label": interface.cable.label if interface.cable_id else None,
+        "mac": str(interface.primary_mac_address.mac_address) if interface.primary_mac_address else None,
+        "mtu": interface.mtu,
+        "vlans": ([str(interface.untagged_vlan)] if interface.untagged_vlan else []) + [str(v) for v in tagged],
+        "state_source": state_source,
         **observation,
     }
 
@@ -52,6 +65,7 @@ class PortPanelView(PermissionRequiredMixin, generic.ObjectView):
         device = get_object_or_404(self.queryset, pk=pk)
         refresh_seconds, _ = _settings()
         return render(request, self.template_name, {"object": device, "tab": self.tab,
+                      "is_switch": device.role.slug == "network-switch",
                       "ports": _ports(device), "refresh_seconds": refresh_seconds})
 
 

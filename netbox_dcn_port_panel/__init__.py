@@ -10,8 +10,8 @@ except ModuleNotFoundError as exc:
 class NetBoxDCNPortPanelConfig(PluginConfig):
     name = "netbox_dcn_port_panel"
     verbose_name = "DCN Port Panel"
-    description = "Physical switch faceplate and live operational-state overlay"
-    version = "0.1.0"
+    description = "Physical switch faceplate and server interface connectivity overlay"
+    version = "0.2.0"
     base_url = "dcn-port-panel"
     min_version = "4.6.0"
     max_version = "4.6.99"

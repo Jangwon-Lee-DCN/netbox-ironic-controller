@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-dcn-port-panel"
-version = "0.1.0"
-description = "DCN physical switch port panel for NetBox 4.6"
+version = "0.2.0"
+description = "DCN switch and server interface panels for NetBox 4.6"
 requires-python = ">=3.12"
 
 [tool.setuptools.packages.find]

@@ -16,6 +16,8 @@
       el.classList.add(port.oper_status);
       el.classList.toggle('disabled', !port.enabled);
       el.querySelector('.port-state').textContent = port.oper_status.toUpperCase();
+      const speed = el.querySelectorAll('.interface-meta')[1];
+      if (speed) speed.textContent = `${port.speed_mbps ? `${port.speed_mbps} Mbps` : 'Speed unknown'}${port.mtu ? ` · MTU ${port.mtu}` : ''}`;
       if (port.oper_status === 'up') up++; else if (port.oper_status === 'down') down++; else unknown++;
     }
     document.getElementById('panel-summary').textContent = `UP ${up} · DOWN ${down} · UNKNOWN ${unknown}`;
