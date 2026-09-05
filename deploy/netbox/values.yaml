@@ -20,8 +20,8 @@ defaultLanguage: ko-kr
 image:
   registry: registry.dcn.ssu.ac.kr
   repository: openstack/netbox
-  tag: port-panel-a076513a1867fc5235ed
-  digest: sha256:0c402c1e996f71e0f56e47f7d134b5002b45f7c090796bb8abe15b916d5f4589
+  tag: port-panel-49dd1ea19bfcb50bd4ef
+  digest: sha256:56ea80b6cbade961674325122a6f71b286215132f345b350bfa979c852069be7
   pullPolicy: IfNotPresent
 plugins:
   - netbox_dcn_port_panel
